@@ -1,0 +1,43 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Java / Maven
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+# Node
+node_modules/
+dist/
+*.local
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Upload temp
+uploads/
+tmp/
+
+# MediaPipe model (run scripts/download_model.py)
+iris-vision/assets/models/*.task
+iris-vision/assets/test_face.*
+
+# Env secrets
+.env
+.env.local

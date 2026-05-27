@@ -1,0 +1,9 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
+opencv-python-headless>=4.9.0
+mediapipe>=0.10.9
+numpy>=1.26.0
+colorspacious>=1.1.2
+pillow>=10.2.0
+pyyaml>=6.0.1

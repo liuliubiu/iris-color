@@ -1,0 +1,23 @@
+# L* 分档边界（上界，不含该值则进入更深档）
+# Grade 1: L* > boundaries[0]
+# Grade 2: boundaries[1] < L* <= boundaries[0]
+# Grade 3: boundaries[2] < L* <= boundaries[1]
+# Grade 4: boundaries[3] < L* <= boundaries[2]
+# Grade 5: L* <= boundaries[3]
+# 介于边界时取较深档（Pan 2017 规则）
+boundaries: [58, 52, 46, 40]
+
+# 质量检测阈值（可在 quality.py 中引用）
+quality:
+  # blur_threshold: 80.0
+  blur_threshold: 5.0
+  overexposed_ratio_max: 0.15
+  min_sample_pixels: 50
+
+# 虹膜环带采样比例（相对眼部 ROI 半径）
+iris_ring:
+  inner_ratio: 0.30
+  outer_ratio: 0.80
+
+# 高光剔除：HSV 中 V 通道超过此值视为高光
+highlight_v_threshold: 240

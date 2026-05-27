@@ -1,0 +1,49 @@
+services:
+  iris-vision:
+    build:
+      context: ./iris-vision
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    networks:
+      - iris-net
+
+  iris-api:
+    build:
+      context: ./iris-api
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      IRIS_VISION_BASE_URL: http://iris-vision:8000
+    depends_on:
+      - iris-vision
+    networks:
+      - iris-net
+
+  iris-web:
+    build:
+      context: ./iris-web
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    depends_on:
+      - iris-api
+    networks:
+      - iris-net
+
+  mysql:
+    image: mysql:8.0
+    profiles:
+      - db
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: iris_color
+    ports:
+      - "3306:3306"
+    networks:
+      - iris-net
+
+networks:
+  iris-net:
+    driver: bridge
