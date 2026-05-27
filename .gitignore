@@ -38,6 +38,9 @@ tmp/
 iris-vision/assets/models/*.task
 iris-vision/assets/test_face.*
 
+# Debug output (dev only)
+iris-vision/debug_output/
+
 # Env secrets
 .env
 .env.local

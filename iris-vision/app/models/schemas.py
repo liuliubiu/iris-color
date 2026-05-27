@@ -51,3 +51,16 @@ class HealthResponse(BaseModel):
 
     status: str = "ok"
     service: str = "iris-vision"
+
+
+class DebugAnalysisResponse(BaseModel):
+    """调试分析响应（仅开发/标定使用）。"""
+
+    success: bool = True
+    run_id: Optional[str] = None
+    saved_dir: Optional[str] = None
+    viewer_url: Optional[str] = None
+    metrics: dict = Field(default_factory=dict)
+    image_urls: dict = Field(default_factory=dict, description="各阶段图片相对 URL")
+    images_base64: Optional[dict] = Field(None, description="include_base64=true 时返回")
+    message: str = ""

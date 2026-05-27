@@ -23,3 +23,10 @@ quality:
   min_sample_pixels: 50
 
 highlight_v_threshold: 240
+
+# 调试后门（不对接 iris-web 前端）
+debug:
+  enabled: true
+  api_key: iris-color-dev
+  save_to_disk: true
+  output_dir: debug_output

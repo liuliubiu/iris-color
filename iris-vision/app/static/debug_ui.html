@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>iris-vision 调试台</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: #0f1419;
+      color: #e6edf3;
+    }
+    header {
+      padding: 16px 20px;
+      border-bottom: 1px solid #30363d;
+      background: #161b22;
+    }
+    header h1 { margin: 0 0 6px; font-size: 20px; }
+    header p { margin: 0; color: #8b949e; font-size: 13px; }
+    main {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 16px;
+      padding: 16px;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    @media (max-width: 960px) {
+      main { grid-template-columns: 1fr; }
+    }
+    .panel {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 15px;
+      color: #58a6ff;
+    }
+    label { display: block; font-size: 13px; color: #8b949e; margin-bottom: 4px; }
+    input[type="text"], input[type="file"] { width: 100%; margin-bottom: 10px; }
+    input[type="text"] {
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #30363d;
+      background: #0d1117;
+      color: #e6edf3;
+    }
+    .camera-box {
+      width: 100%;
+      aspect-ratio: 4/3;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+    video, .preview-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    button {
+      padding: 8px 14px;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      background: #21262d;
+      color: #e6edf3;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button.primary { background: #238636; border-color: #238636; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .checkbox { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-size: 13px; color: #c9d1d9; }
+    .error {
+      background: #3d1214;
+      border: 1px solid #da3633;
+      color: #ffa198;
+      padding: 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      white-space: pre-wrap;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .metric {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 8px 10px;
+    }
+    .metric .k { font-size: 11px; color: #8b949e; }
+    .metric .v { font-size: 15px; font-weight: 600; color: #79c0ff; margin-top: 2px; }
+    .grade-big {
+      font-size: 42px;
+      font-weight: 700;
+      color: #58a6ff;
+      text-align: center;
+      margin: 8px 0 16px;
+    }
+    .stages {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+    }
+    .stage {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .stage h3 {
+      margin: 0;
+      padding: 8px 10px;
+      font-size: 13px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      color: #c9d1d9;
+    }
+    .stage img { width: 100%; display: block; background: #000; }
+    .empty { color: #8b949e; text-align: center; padding: 40px 16px; }
+    .run-meta { font-size: 12px; color: #8b949e; margin-bottom: 12px; }
+    .history { margin-top: 12px; font-size: 12px; }
+    .history a { color: #58a6ff; display: block; margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>iris-vision 调试台</h1>
+    <p>眼部特写上传/拍照 → 查看瞳孔定位、虹膜环带、去高光、取色区域与 Lab/Grade 参数（不对接 iris-web）</p>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>输入</h2>
+      <label for="debugKey">Debug Key</label>
+      <input id="debugKey" type="text" placeholder="iris-color-dev" />
+
+      <div class="camera-box">
+        <video id="video" autoplay playsinline muted></video>
+        <img id="preview" class="preview-img" alt="预览" hidden />
+      </div>
+      <canvas id="canvas" hidden></canvas>
+
+      <div class="btn-row">
+        <button type="button" id="btnCapture" class="primary">拍照</button>
+        <button type="button" id="btnUpload">选择文件</button>
+        <input id="fileInput" type="file" accept="image/*" hidden />
+        <button type="button" id="btnClear">清除</button>
+      </div>
+
+      <label class="checkbox">
+        <input type="checkbox" id="skipQuality" />
+        跳过质量检测（模糊/过曝，便于测试糊图）
+      </label>
+
+      <button type="button" id="btnAnalyze" class="primary" style="width:100%" disabled>
+        开始识别并生成调试图
+      </button>
+
+      <div class="history" id="history"></div>
+    </section>
+
+    <section class="panel" id="resultPanel">
+      <h2>识别结果</h2>
+      <div id="placeholder" class="empty">拍照或上传后点击「开始识别」</div>
+      <div id="errorBox" class="error" hidden></div>
+      <div id="resultContent" hidden>
+        <div class="run-meta" id="runMeta"></div>
+        <div class="grade-big" id="gradeDisplay"></div>
+        <div class="metrics" id="metricsGrid"></div>
+        <div class="stages" id="stagesGrid"></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const params = new URLSearchParams(location.search)
+    const keyInput = document.getElementById('debugKey')
+    keyInput.value = params.get('key') || localStorage.getItem('iris_debug_key') || 'iris-color-dev'
+
+    const video = document.getElementById('video')
+    const preview = document.getElementById('preview')
+    const canvas = document.getElementById('canvas')
+    const fileInput = document.getElementById('fileInput')
+    const btnAnalyze = document.getElementById('btnAnalyze')
+    let currentBlob = null
+    let mediaStream = null
+
+    const STAGE_LABELS = {
+      '00_original': '原图',
+      '01_pupil_localization': '瞳孔定位（黄框=搜索区，蓝圆=瞳孔）',
+      '02_iris_ring': '虹膜环带（绿=外缘，红=内缘）',
+      '03_highlight_rejection': '去高光（红=环内剔除的高光）',
+      '04_valid_samples': '最终取色像素（绿=参与 Lab）',
+      '05_ring_mask_only': '环带 mask 伪彩色',
+    }
+
+    async function startCamera() {
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        })
+        video.srcObject = mediaStream
+        video.hidden = false
+        preview.hidden = true
+        await video.play()
+      } catch (e) {
+        console.warn('camera unavailable', e)
+      }
+    }
+
+    function setImageBlob(blob) {
+      currentBlob = blob
+      btnAnalyze.disabled = false
+      preview.src = URL.createObjectURL(blob)
+      preview.hidden = false
+      video.hidden = true
+    }
+
+    document.getElementById('btnCapture').onclick = () => {
+      if (!video.videoWidth) return alert('摄像头不可用，请使用选择文件')
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+      canvas.getContext('2d').drawImage(video, 0, 0)
+      canvas.toBlob((blob) => blob && setImageBlob(blob), 'image/jpeg', 0.92)
+    }
+
+    document.getElementById('btnUpload').onclick = () => fileInput.click()
+    fileInput.onchange = () => {
+      const f = fileInput.files?.[0]
+      if (f) setImageBlob(f)
+      fileInput.value = ''
+    }
+
+    document.getElementById('btnClear').onclick = () => {
+      currentBlob = null
+      btnAnalyze.disabled = true
+      preview.hidden = true
+      video.hidden = false
+    }
+
+    function renderMetrics(m) {
+      const items = [
+        ['Grade', m.grade],
+        ['置信度', (m.confidence * 100).toFixed(0) + '%'],
+        ['L*', m.lab?.L],
+        ['a*', m.lab?.a],
+        ['b*', m.lab?.b],
+        ['定位方式', m.detection_method],
+        ['瞳孔半径', m.pupil_radius?.toFixed?.(1) ?? '-'],
+        ['环带内径', m.inner_radius?.toFixed?.(1) ?? '-'],
+        ['环带外径', m.outer_radius?.toFixed?.(1) ?? '-'],
+        ['环带像素', m.ring_pixel_count],
+        ['剔除高光', m.highlight_rejected_count],
+        ['有效采样', m.valid_sample_count],
+        ['清晰度', m.blur_score],
+        ['过曝比', m.overexposed_ratio],
+        ['高光阈值 V', m.highlight_v_threshold],
+      ]
+      document.getElementById('metricsGrid').innerHTML = items.map(([k, v]) =>
+        `<div class="metric"><div class="k">${k}</div><div class="v">${v ?? '-'}</div></div>`
+      ).join('')
+    }
+
+    function renderStages(imageUrls, apiKey) {
+      const order = Object.keys(STAGE_LABELS)
+      document.getElementById('stagesGrid').innerHTML = order
+        .filter((k) => imageUrls[k])
+        .map((k) => `<div class="stage"><h3>${STAGE_LABELS[k]}</h3><img src="${imageUrls[k]}" alt="${k}"/></div>`)
+        .join('')
+    }
+
+    async function loadHistory(apiKey) {
+      try {
+        const res = await fetch('/debug/runs?limit=8', { headers: { 'X-Debug-Key': apiKey } })
+        const data = await res.json()
+        const el = document.getElementById('history')
+        if (!data.runs?.length) { el.innerHTML = ''; return }
+        el.innerHTML = '<strong>最近运行：</strong>' + data.runs.map(r =>
+          `<a href="${r.viewer_url}" target="_blank">${r.run_id}</a>`
+        ).join('')
+      } catch (_) {}
+    }
+
+    document.getElementById('btnAnalyze').onclick = async () => {
+      if (!currentBlob) return
+      const apiKey = keyInput.value.trim()
+      localStorage.setItem('iris_debug_key', apiKey)
+      const skipQ = document.getElementById('skipQuality').checked
+
+      document.getElementById('placeholder').hidden = true
+      document.getElementById('errorBox').hidden = true
+      document.getElementById('resultContent').hidden = true
+      btnAnalyze.disabled = true
+      btnAnalyze.textContent = '识别中...'
+
+      const form = new FormData()
+      form.append('file', currentBlob, 'capture.jpg')
+
+      try {
+        const url = `/debug/analyze?skip_quality=${skipQ}&key=${encodeURIComponent(apiKey)}`
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'X-Debug-Key': apiKey },
+          body: form,
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          throw new Error(typeof data.detail === 'object'
+            ? JSON.stringify(data.detail, null, 2)
+            : (data.detail || res.statusText))
+        }
+
+        document.getElementById('resultContent').hidden = false
+        document.getElementById('gradeDisplay').textContent = `Grade ${data.metrics.grade}`
+        document.getElementById('runMeta').textContent =
+          `run_id: ${data.run_id} | 保存目录: ${data.saved_dir || '-'}`
+        renderMetrics(data.metrics)
+        renderStages(data.image_urls, apiKey)
+        loadHistory(apiKey)
+      } catch (err) {
+        document.getElementById('errorBox').hidden = false
+        document.getElementById('errorBox').textContent = String(err.message || err)
+      } finally {
+        btnAnalyze.disabled = false
+        btnAnalyze.textContent = '开始识别并生成调试图'
+      }
+    }
+
+    startCamera()
+    loadHistory(keyInput.value)
+  </script>
+</body>
+</html>

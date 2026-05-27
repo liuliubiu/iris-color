@@ -53,6 +53,12 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 在线文档：http://127.0.0.1:8000/docs
 
+## 调试后门（标定/检验检测区域）
+
+详见 [docs/debug-guide.md](../docs/debug-guide.md)。
+
+**浏览器调试台（推荐）**：http://127.0.0.1:8000/debug/ui?key=iris-color-dev
+
 ## 配置
 
 分档阈值见 `config/grade_thresholds.yaml`（标定时主要修改此文件）。

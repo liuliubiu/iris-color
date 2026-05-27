@@ -10,6 +10,8 @@ iris-vision 入口文件。
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.debug_files import router as debug_files_router
+from app.api.debug_routes import router as debug_router
 from app.api.routes import router
 
 app = FastAPI(
@@ -18,7 +20,6 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# 允许前端跨域（开发环境）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,3 +29,5 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(debug_router)
+app.include_router(debug_files_router)

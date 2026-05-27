@@ -9,7 +9,6 @@ import numpy as np
 from app.services.eye_iris_detect import build_iris_ring_from_pupil, detect_pupil
 from app.services.face_landmarker import detect_face_landmarks
 
-# 虹膜中心 landmark（Face Landmarker 全量模型）
 _LEFT_IRIS_CENTER = 468
 _RIGHT_IRIS_CENTER = 473
 
@@ -24,6 +23,10 @@ class IrisDetectionResult:
     eye_side: str
     sample_pixel_count: int
     method: str = "eye_closeup"
+    pupil_center: Optional[Tuple[int, int]] = None
+    pupil_radius: Optional[float] = None
+    inner_radius: Optional[float] = None
+    outer_radius: Optional[float] = None
 
 
 def _landmark_to_pixel(landmark, width: int, height: int) -> Tuple[int, int]:
@@ -91,10 +94,14 @@ def _detect_from_face_landmarks(
         return IrisDetectionResult(
             mask=mask,
             center=(cx, cy),
-            radius=radius,
+            radius=outer_r,
             eye_side=side,
             sample_pixel_count=sample_count,
             method="face_landmark",
+            pupil_center=(cx, cy),
+            pupil_radius=inner_r,
+            inner_radius=inner_r,
+            outer_radius=outer_r,
         )
     return None
 
@@ -115,7 +122,7 @@ def _detect_from_eye_closeup(
     if pupil is None:
         return None
 
-    mask, outer_r, sample_count = build_iris_ring_from_pupil(
+    mask, outer_r, inner_r, sample_count = build_iris_ring_from_pupil(
         image_bgr.shape,
         pupil,
         inner_pupil_multiplier=eye_cfg.get("inner_pupil_multiplier", 1.15),
@@ -128,6 +135,10 @@ def _detect_from_eye_closeup(
         eye_side="closeup",
         sample_pixel_count=sample_count,
         method="eye_closeup",
+        pupil_center=(pupil.center_x, pupil.center_y),
+        pupil_radius=pupil.radius,
+        inner_radius=inner_r,
+        outer_radius=outer_r,
     )
 
 

@@ -121,7 +121,7 @@ def build_iris_ring_from_pupil(
     pupil: PupilEstimate,
     inner_pupil_multiplier: float,
     outer_pupil_multiplier: float,
-) -> Tuple[np.ndarray, float, int]:
+) -> Tuple[np.ndarray, float, float, int]:
     """
     以瞳孔为中心，向外扩展生成虹膜环带 mask。
 
@@ -142,4 +142,4 @@ def build_iris_ring_from_pupil(
     cv2.circle(mask, (cx, cy), int(outer_r), 255, -1)
     cv2.circle(mask, (cx, cy), int(inner_r), 0, -1)
     sample_count = int(np.count_nonzero(mask))
-    return mask, outer_r, sample_count
+    return mask, outer_r, inner_r, sample_count
