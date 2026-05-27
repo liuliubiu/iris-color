@@ -20,6 +20,7 @@ export interface AnalysisResult {
   lab?: LabValues
   grade?: number
   confidence?: number
+  detection_method?: string
   message?: string
   error?: string
   detail?: unknown

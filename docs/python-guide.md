@@ -11,10 +11,12 @@
 
 | 文件/参数 | 能否修改 | 说明 |
 |-----------|----------|------|
-| `config/grade_thresholds.yaml` | **主要改这里** | L* 分档阈值，标定后更新 |
+| `config/grade_thresholds.yaml` | **主要改这里** | L* 分档、`detection.mode`、瞳孔/环带参数 |
+| `eye_closeup.*`（yaml 内） | 可改 | 瞳孔暗区百分位、环带相对瞳孔倍数 |
 | `app/services/grade.py` | 可改 | 分档逻辑、置信度公式 |
-| `app/services/quality.py` 内阈值 | 可改 | 模糊/过曝/闭眼灵敏度 |
-| `app/services/iris_detect.py` 环带比例 | 谨慎改 | 虹膜采样环半径（默认内径 30%、外径 80%） |
+| `app/services/quality.py` 内阈值 | 可改 | 模糊/过曝灵敏度 |
+| `app/services/eye_iris_detect.py` | 谨慎改 | 眼部特写瞳孔定位算法 |
+| `app/services/iris_detect.py` | 谨慎改 | 定位模式调度（eye_closeup / face / auto） |
 | `main.py` | 一般不改 | 仅改端口时可动 uvicorn 参数 |
 | `app/models/schemas.py` | 一般不改 | 响应字段结构，前后端对齐后再改 |
 | `app/api/routes.py` | 一般不改 | HTTP 路由定义 |
@@ -23,9 +25,13 @@
 ## 处理流程（只读了解）
 
 ```
-上传图片 → 质量检测 → MediaPipe 定位眼部 → 虹膜环带取色
-         → 去高光 → RGB 转 CIELAB → 计算 L*/a*/b* 中位数 → 映射 Grade
+上传「眼部特写」→ 质量检测(模糊/过曝)
+              → 瞳孔定位 → 虹膜环带取色
+              → 去高光 → RGB 转 CIELAB → L*/a*/b* 中位数 → 映射 Grade
 ```
+
+默认 **不需要全脸**：`detection.mode: eye_closeup`（见 `config/grade_thresholds.yaml`）。
+若需兼容全脸照，改为 `face` 或 `auto`。
 
 ## 常用命令
 

@@ -1,23 +1,25 @@
 # L* 分档边界（上界，不含该值则进入更深档）
-# Grade 1: L* > boundaries[0]
-# Grade 2: boundaries[1] < L* <= boundaries[0]
-# Grade 3: boundaries[2] < L* <= boundaries[1]
-# Grade 4: boundaries[3] < L* <= boundaries[2]
-# Grade 5: L* <= boundaries[3]
-# 介于边界时取较深档（Pan 2017 规则）
 boundaries: [58, 52, 46, 40]
 
-# 质量检测阈值（可在 quality.py 中引用）
-quality:
-  # blur_threshold: 80.0
-  blur_threshold: 5.0
-  overexposed_ratio_max: 0.15
-  min_sample_pixels: 50
+# 定位模式: eye_closeup（默认，眼部特写）| face（全脸）| auto（先特写后全脸）
+detection:
+  mode: eye_closeup
 
-# 虹膜环带采样比例（相对眼部 ROI 半径）
+# 眼部特写：瞳孔 → 虹膜环带（相对瞳孔半径的倍数）
+eye_closeup:
+  center_roi_ratio: 0.85
+  pupil_dark_percentile: 12.0
+  inner_pupil_multiplier: 1.15
+  outer_pupil_multiplier: 2.8
+
+# 全脸模式环带比例（相对 iris landmark 半径，仅 mode=face/auto 时使用）
 iris_ring:
   inner_ratio: 0.30
   outer_ratio: 0.80
 
-# 高光剔除：HSV 中 V 通道超过此值视为高光
+quality:
+  blur_threshold: 15.0
+  overexposed_ratio_max: 0.15
+  min_sample_pixels: 50
+
 highlight_v_threshold: 240

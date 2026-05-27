@@ -67,15 +67,19 @@ async def analyze(file: UploadFile = File(...)) -> AnalysisResponse:
     config = _load_yaml_config()
     quality_cfg = config.get("quality", {})
     ring_cfg = config.get("iris_ring", {})
+    detection_cfg = config.get("detection", {})
+    eye_closeup_cfg = config.get("eye_closeup", {})
     highlight_v = config.get("highlight_v_threshold", 240)
+    detection_mode = detection_cfg.get("mode", "eye_closeup")
 
     image_bgr = _decode_image(content)
 
     # 1. 质量检测
     quality = check_quality(
         image_bgr,
-        blur_threshold=quality_cfg.get("blur_threshold", 80.0),
+        blur_threshold=quality_cfg.get("blur_threshold", 15.0),
         overexposed_ratio_max=quality_cfg.get("overexposed_ratio_max", 0.15),
+        detection_mode=detection_mode,
     )
 
     if not quality.passed:
@@ -94,14 +98,19 @@ async def analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             },
         )
 
-    # 2. 虹膜定位
+    # 2. 虹膜定位（默认：眼部特写，不依赖全脸）
     detection = detect_iris_ring_mask(
         image_bgr,
+        mode=detection_mode,
         inner_ratio=ring_cfg.get("inner_ratio", 0.30),
         outer_ratio=ring_cfg.get("outer_ratio", 0.80),
+        eye_closeup_cfg=eye_closeup_cfg,
     )
     if detection is None:
-        raise HTTPException(status_code=400, detail="no_eye_detected")
+        raise HTTPException(
+            status_code=400,
+            detail="no_iris_detected",
+        )
 
     min_pixels = quality_cfg.get("min_sample_pixels", 50)
     if detection.sample_pixel_count < min_pixels:
@@ -135,4 +144,5 @@ async def analyze(file: UploadFile = File(...)) -> AnalysisResponse:
         ),
         grade=grade_result.grade,
         confidence=grade_result.confidence,
+        detection_method=detection.method,
     )

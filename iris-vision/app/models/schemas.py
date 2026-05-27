@@ -31,6 +31,10 @@ class AnalysisResponse(BaseModel):
     lab: LabValues
     grade: int = Field(..., ge=1, le=5, description="Pan 2017 风格 5 档，1 最浅 5 最深")
     confidence: float = Field(..., ge=0.0, le=1.0, description="分档置信度")
+    detection_method: str = Field(
+        "eye_closeup",
+        description="虹膜定位方式：eye_closeup 或 face_landmark",
+    )
     message: str = "provisional thresholds, calibration required"
 
 

@@ -26,7 +26,11 @@ const gradeLabels: Record<number, string> = {
 async function startCamera() {
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+      },
       audio: false,
     })
     if (videoRef.value) {
@@ -99,7 +103,11 @@ async function uploadFile(file: File) {
       const detail = err.response.data as AnalysisResult & { detail?: unknown }
       errorMsg.value =
         detail.error ||
-        (typeof detail.detail === 'string' ? detail.detail : JSON.stringify(detail.detail ?? detail))
+        (detail.detail === 'no_iris_detected'
+          ? '未识别到虹膜，请使用单眼特写（瞳孔居中、对焦清晰）'
+          : typeof detail.detail === 'string'
+            ? detail.detail
+            : JSON.stringify(detail.detail ?? detail))
     } else {
       errorMsg.value = '请求失败，请确认 iris-api 与 iris-vision 已启动'
     }
@@ -126,7 +134,7 @@ onBeforeUnmount(() => {
   <div class="page">
     <header class="header">
       <h1>虹膜颜色识别</h1>
-      <p class="subtitle">Pan 2017 风格 5 档分级（Grade 1 最浅 → Grade 5 最深）</p>
+      <p class="subtitle">上传或拍摄「眼部特写」— 眼睛占满画面，系统直接分析虹膜颜色</p>
     </header>
 
     <el-row :gutter="24">
@@ -166,7 +174,7 @@ onBeforeUnmount(() => {
             class="tip"
             type="info"
             :closable="false"
-            title="拍摄提示：正对镜头、光线均匀、睁眼清晰。MVP 结果为占位阈值，需后续标定。"
+            title="拍摄提示：单眼特写、瞳孔居中、对焦清晰、光线均匀；无需拍全脸。上传已有眼部照片亦可。"
           />
         </el-card>
       </el-col>
