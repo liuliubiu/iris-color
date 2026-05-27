@@ -52,8 +52,40 @@ def draw_pupil_localization(
     pr = detection.pupil_radius or 5
     cv2.circle(out, (cx, cy), int(pr), (255, 120, 0), 2)
     cv2.drawMarker(out, (cx, cy), (0, 0, 255), cv2.MARKER_CROSS, 14, 2)
-    cv2.putText(out, f"pupil r={pr:.1f}", (cx + 8, cy - 8),
+    pupil_label = f"pupil r={pr:.1f}"
+    if detection.pupil_confidence is not None:
+        pupil_label += f" conf={detection.pupil_confidence:.2f}"
+    cv2.putText(out, pupil_label, (cx + 8, cy - 8),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 120, 0), 1, cv2.LINE_AA)
+    return out
+
+
+def draw_pupil_candidates(
+    image_bgr: np.ndarray,
+    detection: IrisDetectionResult,
+) -> np.ndarray:
+    """图 1a：瞳孔候选暗区，用于判断阈值是否把虹膜也吞进去。"""
+    out = image_bgr.copy()
+    candidate_mask = detection.candidate_mask
+    if candidate_mask is None:
+        cv2.putText(out, "candidate mask unavailable", (12, 28),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2, cv2.LINE_AA)
+        return out
+
+    overlay = out.copy()
+    mask = candidate_mask > 0
+    overlay[mask] = (overlay[mask] * 0.35 + np.array([0, 255, 255]) * 0.65).astype(np.uint8)
+    out = cv2.addWeighted(overlay, 0.65, out, 0.35, 0)
+    cv2.putText(
+        out,
+        f"yellow=dark candidates count={detection.candidate_count or 0}",
+        (12, 28),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
     return out
 
 
@@ -79,7 +111,12 @@ def draw_iris_ring(
 
     cv2.circle(out, (cx, cy), outer_r, (0, 220, 0), 2)
     cv2.circle(out, (cx, cy), inner_r, (0, 0, 255), 2)
-    cv2.putText(out, "green=outer red=inner", (12, 28),
+    method = detection.iris_outer_method or "unknown"
+    conf = detection.iris_confidence
+    label = f"green=outer red=inner method={method}"
+    if conf is not None:
+        label += f" conf={conf:.2f}"
+    cv2.putText(out, label, (12, 28),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
     return out
 
@@ -100,11 +137,12 @@ def draw_highlight_rejection(
     out = out.astype(np.uint8)
 
     highlight_overlay = out.copy()
-    highlight_overlay[sampling.highlight_in_ring] = (
-        highlight_overlay[sampling.highlight_in_ring] * 0.3 + np.array([0, 0, 255]) * 0.7
+    rejected = sampling.highlight_in_ring | sampling.bright_in_ring | sampling.dark_in_ring
+    highlight_overlay[rejected] = (
+        highlight_overlay[rejected] * 0.3 + np.array([0, 0, 255]) * 0.7
     ).astype(np.uint8)
     out = cv2.addWeighted(highlight_overlay, 0.7, out, 0.3, 0)
-    cv2.putText(out, "red=highlight rejected in ring", (12, 28),
+    cv2.putText(out, "red=rejected highlight/bright/dark in ring", (12, 28),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
     return out
 
@@ -132,6 +170,7 @@ def build_debug_images(
 ) -> Dict[str, np.ndarray]:
     """生成全部调试叠加图。"""
     return {
+        "01_pupil_candidates": draw_pupil_candidates(image_bgr, pipeline.detection),
         "01_pupil_localization": draw_pupil_localization(
             image_bgr,
             pipeline.detection,
@@ -157,8 +196,15 @@ def build_debug_metrics(pipeline: AnalysisPipelineResult, highlight_v: int) -> d
         "outer_radius": det.outer_radius,
         "ring_pixel_count": int(smp.ring.sum()),
         "highlight_rejected_count": int(smp.highlight_in_ring.sum()),
+        "bright_rejected_count": int(smp.bright_in_ring.sum()),
+        "dark_rejected_count": int(smp.dark_in_ring.sum()),
         "valid_sample_count": int(smp.valid.sum()),
         "highlight_v_threshold": highlight_v,
+        "pupil_method": det.pupil_method,
+        "iris_outer_method": det.iris_outer_method,
+        "pupil_confidence": det.pupil_confidence,
+        "iris_confidence": det.iris_confidence,
+        "candidate_count": det.candidate_count,
         "blur_score": round(pipeline.quality.blur_score, 2),
         "overexposed_ratio": round(pipeline.quality.overexposed_ratio, 4),
         "lab": {

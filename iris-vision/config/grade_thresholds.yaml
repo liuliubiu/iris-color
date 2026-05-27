@@ -11,6 +11,8 @@ eye_closeup:
   pupil_dark_percentile: 12.0
   inner_pupil_multiplier: 1.15
   outer_pupil_multiplier: 2.8
+  inner_iris_ratio: 0.35
+  outer_iris_ratio: 0.85
 
 # 全脸模式环带比例（相对 iris landmark 半径，仅 mode=face/auto 时使用）
 iris_ring:

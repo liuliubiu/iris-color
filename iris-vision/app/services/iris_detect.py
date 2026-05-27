@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
-from app.services.eye_iris_detect import build_iris_ring_from_pupil, detect_pupil
+from app.services.eye_iris_detect import build_refined_iris_ring, detect_pupil
 from app.services.face_landmarker import detect_face_landmarks
 
 _LEFT_IRIS_CENTER = 468
@@ -27,6 +27,12 @@ class IrisDetectionResult:
     pupil_radius: Optional[float] = None
     inner_radius: Optional[float] = None
     outer_radius: Optional[float] = None
+    pupil_confidence: Optional[float] = None
+    iris_confidence: Optional[float] = None
+    pupil_method: Optional[str] = None
+    iris_outer_method: Optional[str] = None
+    candidate_count: Optional[int] = None
+    candidate_mask: Optional[np.ndarray] = None
 
 
 def _landmark_to_pixel(landmark, width: int, height: int) -> Tuple[int, int]:
@@ -102,6 +108,11 @@ def _detect_from_face_landmarks(
             pupil_radius=inner_r,
             inner_radius=inner_r,
             outer_radius=outer_r,
+            pupil_confidence=0.7,
+            iris_confidence=0.7,
+            pupil_method="face_landmark",
+            iris_outer_method="face_landmark",
+            candidate_count=0,
         )
     return None
 
@@ -122,23 +133,31 @@ def _detect_from_eye_closeup(
     if pupil is None:
         return None
 
-    mask, outer_r, inner_r, sample_count = build_iris_ring_from_pupil(
-        image_bgr.shape,
+    ring = build_refined_iris_ring(
+        image_bgr,
         pupil,
         inner_pupil_multiplier=eye_cfg.get("inner_pupil_multiplier", 1.15),
         outer_pupil_multiplier=eye_cfg.get("outer_pupil_multiplier", 2.8),
+        inner_iris_ratio=eye_cfg.get("inner_iris_ratio", 0.35),
+        outer_iris_ratio=eye_cfg.get("outer_iris_ratio", 0.85),
     )
     return IrisDetectionResult(
-        mask=mask,
+        mask=ring.mask,
         center=(pupil.center_x, pupil.center_y),
-        radius=outer_r,
+        radius=ring.outer_radius,
         eye_side="closeup",
-        sample_pixel_count=sample_count,
+        sample_pixel_count=ring.sample_pixel_count,
         method="eye_closeup",
         pupil_center=(pupil.center_x, pupil.center_y),
         pupil_radius=pupil.radius,
-        inner_radius=inner_r,
-        outer_radius=outer_r,
+        inner_radius=ring.inner_radius,
+        outer_radius=ring.outer_radius,
+        pupil_confidence=pupil.confidence,
+        iris_confidence=ring.iris_confidence,
+        pupil_method=pupil.method,
+        iris_outer_method=ring.iris_outer_method,
+        candidate_count=pupil.candidate_count,
+        candidate_mask=pupil.candidate_mask,
     )
 
 

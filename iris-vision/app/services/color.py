@@ -24,6 +24,8 @@ class SamplingMasks:
 
     ring: np.ndarray
     highlight_in_ring: np.ndarray
+    dark_in_ring: np.ndarray
+    bright_in_ring: np.ndarray
     valid: np.ndarray
 
 
@@ -32,13 +34,22 @@ def compute_sampling_masks(
     mask: np.ndarray,
     highlight_v_threshold: int = 240,
 ) -> SamplingMasks:
-    """计算环带、环内高光、最终有效采样区域。"""
+    """计算环带、环内高光/极暗/过亮像素、最终有效采样区域。"""
     hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
     v_channel = hsv[:, :, 2]
     ring = mask > 0
     highlight_in_ring = ring & (v_channel >= highlight_v_threshold)
-    valid = ring & (v_channel < highlight_v_threshold)
-    return SamplingMasks(ring=ring, highlight_in_ring=highlight_in_ring, valid=valid)
+    dark_in_ring = ring & (v_channel <= 8)
+    bright_cutoff = max(min(highlight_v_threshold - 15, 235), 220)
+    bright_in_ring = ring & (v_channel >= bright_cutoff)
+    valid = ring & ~highlight_in_ring & ~dark_in_ring & ~bright_in_ring
+    return SamplingMasks(
+        ring=ring,
+        highlight_in_ring=highlight_in_ring,
+        dark_in_ring=dark_in_ring,
+        bright_in_ring=bright_in_ring,
+        valid=valid,
+    )
 
 
 def extract_iris_lab_median(

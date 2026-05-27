@@ -138,9 +138,10 @@ async def debug_viewer(
 
     panels = [
         ("00_original", "原图"),
+        ("01_pupil_candidates", "瞳孔候选（黄=极暗候选区域）"),
         ("01_pupil_localization", "瞳孔定位（黄框=搜索区，蓝圆=瞳孔，红十字=中心）"),
         ("02_iris_ring", "虹膜环带（绿=外缘，红=内缘，青=采样环）"),
-        ("03_highlight_rejection", "去高光（红=环内被剔除的高光，外围变暗）"),
+        ("03_highlight_rejection", "剔除干扰（红=环内被剔除的高光/过亮/极暗像素，外围变暗）"),
         ("04_valid_samples", "最终取色像素（绿色=参与 Lab 中位数）"),
         ("05_ring_mask_only", "环带 mask 伪彩色"),
     ]
