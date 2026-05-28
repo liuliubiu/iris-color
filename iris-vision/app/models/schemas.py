@@ -13,6 +13,15 @@ class LabValues(BaseModel):
     b: float = Field(..., description="黄蓝轴")
 
 
+class IrisColorInfo(BaseModel):
+    """基础虹膜颜色判断。"""
+
+    code: str = Field(..., description="颜色分类代码")
+    label: str = Field(..., description="中文颜色名称")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="颜色判断置信度")
+    reason: str = Field(..., description="主要判定依据")
+
+
 class QualityInfo(BaseModel):
     """图像质量检测结果。"""
 
@@ -29,6 +38,7 @@ class AnalysisResponse(BaseModel):
     success: bool = True
     quality: QualityInfo
     lab: LabValues
+    iris_color: IrisColorInfo
     grade: int = Field(..., ge=1, le=5, description="Pan 2017 风格 5 档，1 最浅 5 最深")
     confidence: float = Field(..., ge=0.0, le=1.0, description="分档置信度")
     detection_method: str = Field(

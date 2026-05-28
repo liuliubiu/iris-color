@@ -10,6 +10,7 @@ from app.models.schemas import (
     AnalysisResponse,
     ErrorResponse,
     HealthResponse,
+    IrisColorInfo,
     LabValues,
     QualityInfo,
 )
@@ -83,6 +84,12 @@ async def analyze(file: UploadFile = File(...)) -> AnalysisResponse:
             L=round(result.lab.L, 2),
             a=round(result.lab.a, 2),
             b=round(result.lab.b, 2),
+        ),
+        iris_color=IrisColorInfo(
+            code=result.iris_color.code,
+            label=result.iris_color.label,
+            confidence=result.iris_color.confidence,
+            reason=result.iris_color.reason,
         ),
         grade=result.grade.grade,
         confidence=result.grade.confidence,

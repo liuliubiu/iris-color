@@ -212,6 +212,12 @@ def build_debug_metrics(pipeline: AnalysisPipelineResult, highlight_v: int) -> d
             "a": round(pipeline.lab.a, 2),
             "b": round(pipeline.lab.b, 2),
         },
+        "iris_color": {
+            "code": pipeline.iris_color.code,
+            "label": pipeline.iris_color.label,
+            "confidence": pipeline.iris_color.confidence,
+            "reason": pipeline.iris_color.reason,
+        },
         "grade": pipeline.grade.grade,
         "confidence": pipeline.grade.confidence,
     }

@@ -6,7 +6,14 @@ from typing import Optional
 
 import yaml
 
-from app.services.color import LabResult, SamplingMasks, compute_sampling_masks, extract_iris_lab_median
+from app.services.color import (
+    IrisColorResult,
+    LabResult,
+    SamplingMasks,
+    classify_iris_color,
+    compute_sampling_masks,
+    extract_iris_lab_median,
+)
 from app.services.grade import GradeResult, grade_from_l_star
 from app.services.iris_detect import IrisDetectionResult, detect_iris_ring_mask
 from app.services.quality import QualityResult, check_quality
@@ -21,6 +28,7 @@ class AnalysisPipelineResult:
     sampling: SamplingMasks
     lab: LabResult
     grade: GradeResult
+    iris_color: IrisColorResult
     detection_mode: str
 
 
@@ -82,6 +90,7 @@ def run_analysis(
 
     lab = extract_iris_lab_median(image_bgr, detection.mask, highlight_v)
     grade = grade_from_l_star(lab.L, config_path)
+    iris_color = classify_iris_color(lab, config)
 
     return AnalysisPipelineResult(
         quality=quality,
@@ -89,5 +98,6 @@ def run_analysis(
         sampling=sampling,
         lab=lab,
         grade=grade,
+        iris_color=iris_color,
         detection_mode=detection_mode,
     )

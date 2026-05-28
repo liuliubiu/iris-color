@@ -6,6 +6,13 @@ export interface LabValues {
   b: number
 }
 
+export interface IrisColorInfo {
+  code: string
+  label: string
+  confidence: number
+  reason: string
+}
+
 export interface QualityInfo {
   blur_score: number
   overexposed_ratio: number
@@ -18,6 +25,7 @@ export interface AnalysisResult {
   success: boolean
   quality?: QualityInfo
   lab?: LabValues
+  iris_color?: IrisColorInfo
   grade?: number
   confidence?: number
   detection_method?: string

@@ -191,12 +191,22 @@ onBeforeUnmount(() => {
           <el-alert v-else-if="errorMsg" type="error" :title="errorMsg" show-icon />
 
           <div v-else-if="result" class="result-panel">
+            <div class="color-display">
+              虹膜颜色：{{ result.iris_color?.label ?? '未知' }}
+            </div>
+
             <div class="grade-display">
               <span class="grade-number">Grade {{ result.grade }}</span>
               <span class="grade-label">{{ gradeLabels[result.grade ?? 0] ?? '' }}</span>
             </div>
 
             <el-descriptions :column="1" border>
+              <el-descriptions-item label="颜色置信度">
+                {{ ((result.iris_color?.confidence ?? 0) * 100).toFixed(0) }}%
+              </el-descriptions-item>
+              <el-descriptions-item label="颜色依据">
+                {{ result.iris_color?.reason ?? '-' }}
+              </el-descriptions-item>
               <el-descriptions-item label="置信度">
                 {{ ((result.confidence ?? 0) * 100).toFixed(0) }}%
               </el-descriptions-item>
@@ -296,6 +306,14 @@ onBeforeUnmount(() => {
 .grade-display {
   text-align: center;
   margin-bottom: 20px;
+}
+
+.color-display {
+  text-align: center;
+  margin-bottom: 12px;
+  font-size: 20px;
+  font-weight: 600;
+  color: #303133;
 }
 
 .grade-number {

@@ -253,6 +253,9 @@
     function renderMetrics(m) {
       const items = [
         ['Grade', m.grade],
+        ['虹膜颜色', m.iris_color?.label],
+        ['颜色置信度', m.iris_color?.confidence != null ? (m.iris_color.confidence * 100).toFixed(0) + '%' : '-'],
+        ['颜色依据', m.iris_color?.reason],
         ['置信度', (m.confidence * 100).toFixed(0) + '%'],
         ['L*', m.lab?.L],
         ['a*', m.lab?.a],
