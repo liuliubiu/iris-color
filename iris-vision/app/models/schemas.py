@@ -22,6 +22,17 @@ class IrisColorInfo(BaseModel):
     reason: str = Field(..., description="主要判定依据")
 
 
+class DetectionInfo(BaseModel):
+    """前端人工调整所需的定位参数。"""
+
+    center_x: int = Field(..., description="瞳孔/虹膜环带中心 x")
+    center_y: int = Field(..., description="瞳孔/虹膜环带中心 y")
+    pupil_radius: float = Field(..., description="瞳孔半径")
+    inner_radius: float = Field(..., description="取色环带内半径")
+    outer_radius: float = Field(..., description="取色环带外半径")
+    method: str = Field(..., description="定位方式")
+
+
 class QualityInfo(BaseModel):
     """图像质量检测结果。"""
 
@@ -39,6 +50,8 @@ class AnalysisResponse(BaseModel):
     quality: QualityInfo
     lab: LabValues
     iris_color: IrisColorInfo
+    detection: DetectionInfo
+    debug_images: dict = Field(default_factory=dict, description="前端展示识别依据用的调试图 base64")
     grade: int = Field(..., ge=1, le=5, description="Pan 2017 风格 5 档，1 最浅 5 最深")
     confidence: float = Field(..., ge=0.0, le=1.0, description="分档置信度")
     detection_method: str = Field(

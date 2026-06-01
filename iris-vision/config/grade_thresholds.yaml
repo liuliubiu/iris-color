@@ -1,5 +1,5 @@
 # L* 分档边界（上界，不含该值则进入更深档）
-boundaries: [58, 52, 46, 40]
+boundaries: [32, 24, 19, 13]
 
 # 定位模式: eye_closeup（默认，眼部特写）| face（全脸）| auto（先特写后全脸）
 detection:

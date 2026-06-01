@@ -44,12 +44,25 @@ public class IrisAnalysisController {
 
     @PostMapping(value = "/iris/analyze", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> analyze(@RequestParam("file") MultipartFile file) {
+        return analyzeInternal(file, null);
+    }
+
+    @PostMapping(value = "/iris/analyze/manual", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> analyzeManual(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam("manual_params") String manualParams) {
+        return analyzeInternal(file, manualParams);
+    }
+
+    private ResponseEntity<String> analyzeInternal(MultipartFile file, String manualParams) {
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().body("{\"success\":false,\"error\":\"empty_file\"}");
         }
 
         try {
-            String response = visionClientService.analyze(file);
+            String response = manualParams == null
+                    ? visionClientService.analyze(file)
+                    : visionClientService.analyzeManual(file, manualParams);
             return ResponseEntity.ok(response);
         } catch (HttpClientErrorException | HttpServerErrorException ex) {
             return ResponseEntity.status(ex.getStatusCode())

@@ -1,9 +1,10 @@
 """调试后门 API（不对接前端业务）。"""
 
+import json
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse
 
 from app.models.schemas import DebugAnalysisResponse
@@ -42,6 +43,64 @@ def _decode_image(content: bytes):
     return image
 
 
+def _parse_manual_params(raw: str) -> dict:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="invalid_manual_params_json") from exc
+    required = ["center_x", "center_y", "pupil_radius", "inner_radius", "outer_radius"]
+    if not isinstance(data, dict) or any(key not in data for key in required):
+        raise HTTPException(status_code=400, detail="manual_params_missing_fields")
+    try:
+        return {key: float(data[key]) for key in required}
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="manual_params_must_be_numbers") from exc
+
+
+def _build_debug_response(
+    image_bgr,
+    config: dict,
+    pipeline,
+    *,
+    include_base64: bool,
+) -> DebugAnalysisResponse:
+    debug_cfg = config.get("debug", {})
+    highlight_v = config.get("highlight_v_threshold", 240)
+    eye_cfg = config.get("eye_closeup", {})
+    images = build_debug_images(image_bgr, pipeline, eye_cfg)
+    metrics = build_debug_metrics(pipeline, highlight_v)
+
+    run_id = None
+    saved_dir = None
+    image_urls = {}
+
+    if debug_cfg.get("save_to_disk", True):
+        out_root = ROOT / debug_cfg.get("output_dir", "debug_output")
+        run_id, run_dir = save_debug_run(out_root, image_bgr, images, metrics)
+        saved_dir = str(run_dir.relative_to(ROOT)).replace("\\", "/")
+
+    api_key = debug_cfg.get("api_key", "iris-color-dev")
+    if run_id:
+        image_urls = {
+            name: f"/debug/files/{run_id}/{name}.jpg?key={api_key}"
+            for name in ["00_original"] + list(images.keys())
+        }
+        image_urls["metrics"] = f"/debug/files/{run_id}/metrics.json?key={api_key}"
+
+    viewer_url = f"/debug/viewer/{run_id}?key={api_key}" if run_id else None
+
+    return DebugAnalysisResponse(
+        success=True,
+        run_id=run_id,
+        saved_dir=saved_dir,
+        viewer_url=viewer_url,
+        metrics=metrics,
+        image_urls=image_urls,
+        images_base64=images_to_base64(images) if include_base64 else None,
+        message="debug run saved; open viewer_url in browser",
+    )
+
+
 @router.post("/analyze", response_model=DebugAnalysisResponse)
 async def analyze_debug(
     file: UploadFile = File(...),
@@ -65,10 +124,6 @@ async def analyze_debug(
         raise HTTPException(status_code=400, detail="empty_file")
 
     image_bgr = _decode_image(content)
-    debug_cfg = config.get("debug", {})
-    highlight_v = config.get("highlight_v_threshold", 240)
-    eye_cfg = config.get("eye_closeup", {})
-
     try:
         pipeline = run_analysis(
             image_bgr,
@@ -87,39 +142,49 @@ async def analyze_debug(
             }
         raise HTTPException(status_code=422, detail=detail) from exc
 
-    images = build_debug_images(image_bgr, pipeline, eye_cfg)
-    metrics = build_debug_metrics(pipeline, highlight_v)
+    return _build_debug_response(image_bgr, config, pipeline, include_base64=include_base64)
 
-    run_id = None
-    saved_dir = None
-    image_urls = {}
 
-    if debug_cfg.get("save_to_disk", True):
-        out_root = ROOT / debug_cfg.get("output_dir", "debug_output")
-        run_id, run_dir = save_debug_run(out_root, image_bgr, images, metrics)
-        saved_dir = str(run_dir.relative_to(ROOT)).replace("\\", "/")
+@router.post("/analyze/manual", response_model=DebugAnalysisResponse)
+async def analyze_debug_manual(
+    file: UploadFile = File(...),
+    manual_params: str = Form(..., description="JSON: center_x, center_y, pupil_radius, inner_radius, outer_radius"),
+    x_debug_key: Optional[str] = Header(None, alias="X-Debug-Key"),
+    key: Optional[str] = Query(None, description="与 X-Debug-Key 二选一，便于调试页表单提交"),
+    skip_quality: bool = Query(False, description="跳过模糊/过曝质量门槛，便于测试糊图"),
+    include_base64: bool = Query(False, description="是否在 JSON 内返回 base64 图片（体积大）"),
+):
+    """调试专用：按人工调整的瞳孔/环带参数重新分析并保存新 run。"""
+    config = load_config(CONFIG_PATH)
+    _verify_debug_key(x_debug_key or key, config)
 
-    api_key = debug_cfg.get("api_key", "iris-color-dev")
-    image_urls = {}
-    if run_id:
-        image_urls = {
-            name: f"/debug/files/{run_id}/{name}.jpg?key={api_key}"
-            for name in ["00_original"] + list(images.keys())
-        }
-        image_urls["metrics"] = f"/debug/files/{run_id}/metrics.json?key={api_key}"
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="empty_file")
 
-    viewer_url = f"/debug/viewer/{run_id}?key={api_key}" if run_id else None
+    image_bgr = _decode_image(content)
+    manual_detection = _parse_manual_params(manual_params)
 
-    return DebugAnalysisResponse(
-        success=True,
-        run_id=run_id,
-        saved_dir=saved_dir,
-        viewer_url=viewer_url,
-        metrics=metrics,
-        image_urls=image_urls,
-        images_base64=images_to_base64(images) if include_base64 else None,
-        message="debug run saved; open viewer_url in browser",
-    )
+    try:
+        pipeline = run_analysis(
+            image_bgr,
+            config,
+            CONFIG_PATH,
+            skip_quality=skip_quality,
+            manual_detection=manual_detection,
+        )
+    except AnalysisError as exc:
+        detail = {"success": False, "error": exc.code}
+        if exc.quality:
+            detail["quality"] = {
+                "blur_score": exc.quality.blur_score,
+                "overexposed_ratio": exc.quality.overexposed_ratio,
+                "eye_open": exc.quality.eye_open,
+                "issues": exc.quality.issues,
+            }
+        raise HTTPException(status_code=422, detail=detail) from exc
+
+    return _build_debug_response(image_bgr, config, pipeline, include_base64=include_base64)
 
 
 @router.get("/viewer/{run_id}", response_class=HTMLResponse)

@@ -15,7 +15,7 @@ from app.services.color import (
     extract_iris_lab_median,
 )
 from app.services.grade import GradeResult, grade_from_l_star
-from app.services.iris_detect import IrisDetectionResult, detect_iris_ring_mask
+from app.services.iris_detect import IrisDetectionResult, build_manual_iris_detection, detect_iris_ring_mask
 from app.services.quality import QualityResult, check_quality
 
 
@@ -52,6 +52,7 @@ def run_analysis(
     config_path: Path,
     *,
     skip_quality: bool = False,
+    manual_detection: Optional[dict] = None,
 ) -> AnalysisPipelineResult:
     """执行质量检测 → 定位 → 取色 → 分档。"""
     quality_cfg = config.get("quality", {})
@@ -70,13 +71,17 @@ def run_analysis(
     if not skip_quality and not quality.passed:
         raise AnalysisError("quality_check_failed", quality)
 
-    detection = detect_iris_ring_mask(
-        image_bgr,
-        mode=detection_mode,
-        inner_ratio=ring_cfg.get("inner_ratio", 0.30),
-        outer_ratio=ring_cfg.get("outer_ratio", 0.80),
-        eye_closeup_cfg=eye_closeup_cfg,
-    )
+    if manual_detection is not None:
+        detection = build_manual_iris_detection(image_bgr.shape, manual_detection)
+        detection_mode = "manual_adjustment"
+    else:
+        detection = detect_iris_ring_mask(
+            image_bgr,
+            mode=detection_mode,
+            inner_ratio=ring_cfg.get("inner_ratio", 0.30),
+            outer_ratio=ring_cfg.get("outer_ratio", 0.80),
+            eye_closeup_cfg=eye_closeup_cfg,
+        )
     if detection is None:
         raise AnalysisError("no_iris_detected", quality)
 

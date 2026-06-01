@@ -130,6 +130,24 @@
     .run-meta { font-size: 12px; color: #8b949e; margin-bottom: 12px; }
     .history { margin-top: 12px; font-size: 12px; }
     .history a { color: #58a6ff; display: block; margin: 4px 0; }
+    .manual-editor { margin-top: 14px; border-top: 1px solid #30363d; padding-top: 12px; }
+    .manual-canvas-wrap { width: 100%; background: #000; border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
+    #manualCanvas { width: 100%; display: block; cursor: default; touch-action: none; }
+    .manual-fields {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .manual-fields input {
+      width: 100%;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid #30363d;
+      background: #0d1117;
+      color: #e6edf3;
+    }
+    .manual-hint { font-size: 12px; color: #8b949e; margin-bottom: 10px; line-height: 1.5; }
   </style>
 </head>
 <body>
@@ -166,6 +184,24 @@
         开始识别并生成调试图
       </button>
 
+      <div class="manual-editor" id="manualEditor" hidden>
+        <h2>人工调整</h2>
+        <div class="manual-hint">拖动中心移动整组圆；拖动蓝/红/绿圆边分别调整瞳孔、内环、外环。也可直接改数值。</div>
+        <div class="manual-canvas-wrap">
+          <canvas id="manualCanvas"></canvas>
+        </div>
+        <div class="manual-fields">
+          <label>中心 X<input id="manualCenterX" type="number" step="1" /></label>
+          <label>中心 Y<input id="manualCenterY" type="number" step="1" /></label>
+          <label>瞳孔半径<input id="manualPupilRadius" type="number" step="1" min="1" /></label>
+          <label>内环半径<input id="manualInnerRadius" type="number" step="1" min="1" /></label>
+          <label>外环半径<input id="manualOuterRadius" type="number" step="1" min="1" /></label>
+        </div>
+        <button type="button" id="btnManualAnalyze" class="primary" style="width:100%">
+          应用人工调整并重新识别
+        </button>
+      </div>
+
       <div class="history" id="history"></div>
     </section>
 
@@ -192,8 +228,21 @@
     const canvas = document.getElementById('canvas')
     const fileInput = document.getElementById('fileInput')
     const btnAnalyze = document.getElementById('btnAnalyze')
+    const manualEditor = document.getElementById('manualEditor')
+    const manualCanvas = document.getElementById('manualCanvas')
+    const manualCtx = manualCanvas.getContext('2d')
+    const manualInputs = {
+      center_x: document.getElementById('manualCenterX'),
+      center_y: document.getElementById('manualCenterY'),
+      pupil_radius: document.getElementById('manualPupilRadius'),
+      inner_radius: document.getElementById('manualInnerRadius'),
+      outer_radius: document.getElementById('manualOuterRadius'),
+    }
     let currentBlob = null
     let mediaStream = null
+    let manualState = null
+    let manualImage = new Image()
+    let dragMode = null
 
     const STAGE_LABELS = {
       '00_original': '原图',
@@ -245,10 +294,168 @@
 
     document.getElementById('btnClear').onclick = () => {
       currentBlob = null
+      manualState = null
       btnAnalyze.disabled = true
+      manualEditor.hidden = true
       preview.hidden = true
       video.hidden = false
     }
+
+    function paramsFromMetrics(m) {
+      return {
+        center_x: m.pupil_center?.[0] ?? 0,
+        center_y: m.pupil_center?.[1] ?? 0,
+        pupil_radius: m.pupil_radius ?? 5,
+        inner_radius: m.inner_radius ?? Math.max((m.pupil_radius ?? 5) * 1.2, 8),
+        outer_radius: m.outer_radius ?? Math.max((m.pupil_radius ?? 5) * 2.5, 16),
+      }
+    }
+
+    function syncManualInputs() {
+      if (!manualState) return
+      for (const [key, input] of Object.entries(manualInputs)) {
+        input.value = Math.round(manualState[key])
+      }
+    }
+
+    function syncManualStateFromInputs() {
+      if (!manualState) return
+      for (const [key, input] of Object.entries(manualInputs)) {
+        manualState[key] = Number(input.value || manualState[key])
+      }
+      normalizeManualState()
+      drawManualCanvas()
+    }
+
+    function normalizeManualState() {
+      if (!manualState) return
+      const minDim = Math.min(manualCanvas.width || 1, manualCanvas.height || 1)
+      manualState.center_x = Math.max(0, Math.min(manualCanvas.width - 1, manualState.center_x))
+      manualState.center_y = Math.max(0, Math.min(manualCanvas.height - 1, manualState.center_y))
+      manualState.pupil_radius = Math.max(2, Math.min(manualState.pupil_radius, minDim * 0.45))
+      manualState.inner_radius = Math.max(manualState.pupil_radius + 1, Math.min(manualState.inner_radius, minDim * 0.48))
+      manualState.outer_radius = Math.max(manualState.inner_radius + 2, Math.min(manualState.outer_radius, minDim * 0.50))
+      syncManualInputs()
+    }
+
+    function drawManualCanvas() {
+      if (!manualState || !manualImage.complete || !manualCtx) return
+      manualCtx.clearRect(0, 0, manualCanvas.width, manualCanvas.height)
+      manualCtx.drawImage(manualImage, 0, 0)
+      const { center_x: cx, center_y: cy, pupil_radius: pr, inner_radius: ir, outer_radius: or } = manualState
+      manualCtx.lineWidth = Math.max(2, manualCanvas.width / 240)
+      manualCtx.fillStyle = 'rgba(0, 255, 255, 0.18)'
+      manualCtx.beginPath()
+      manualCtx.arc(cx, cy, or, 0, Math.PI * 2)
+      manualCtx.arc(cx, cy, ir, 0, Math.PI * 2, true)
+      manualCtx.fill()
+      manualCtx.strokeStyle = '#2f81f7'
+      manualCtx.beginPath()
+      manualCtx.arc(cx, cy, pr, 0, Math.PI * 2)
+      manualCtx.stroke()
+      manualCtx.strokeStyle = '#ff4d4f'
+      manualCtx.beginPath()
+      manualCtx.arc(cx, cy, ir, 0, Math.PI * 2)
+      manualCtx.stroke()
+      manualCtx.strokeStyle = '#3fb950'
+      manualCtx.beginPath()
+      manualCtx.arc(cx, cy, or, 0, Math.PI * 2)
+      manualCtx.stroke()
+      manualCtx.strokeStyle = '#ff4d4f'
+      manualCtx.beginPath()
+      manualCtx.moveTo(cx - 8, cy)
+      manualCtx.lineTo(cx + 8, cy)
+      manualCtx.moveTo(cx, cy - 8)
+      manualCtx.lineTo(cx, cy + 8)
+      manualCtx.stroke()
+    }
+
+    function canvasPoint(event) {
+      const rect = manualCanvas.getBoundingClientRect()
+      return {
+        x: (event.clientX - rect.left) * manualCanvas.width / rect.width,
+        y: (event.clientY - rect.top) * manualCanvas.height / rect.height,
+      }
+    }
+
+    function hitMode(point) {
+      if (!manualState) return null
+      const dx = point.x - manualState.center_x
+      const dy = point.y - manualState.center_y
+      const dist = Math.hypot(dx, dy)
+      const tol = Math.max(8, manualCanvas.width / 80)
+      if (dist < tol) return 'move'
+      if (Math.abs(dist - manualState.pupil_radius) < tol) return 'pupil_radius'
+      if (Math.abs(dist - manualState.inner_radius) < tol) return 'inner_radius'
+      if (Math.abs(dist - manualState.outer_radius) < tol) return 'outer_radius'
+      return null
+    }
+
+    function updateManualCursor(event) {
+      if (dragMode) {
+        manualCanvas.style.cursor = 'grabbing'
+        return
+      }
+      manualCanvas.style.cursor = hitMode(canvasPoint(event)) ? 'grab' : 'default'
+    }
+
+    function setupManualEditor(metrics, originalUrl) {
+      manualState = paramsFromMetrics(metrics)
+      manualImage = new Image()
+      manualImage.onload = () => {
+        manualCanvas.width = manualImage.naturalWidth
+        manualCanvas.height = manualImage.naturalHeight
+        normalizeManualState()
+        drawManualCanvas()
+        manualEditor.hidden = false
+      }
+      manualImage.src = originalUrl
+    }
+
+    for (const input of Object.values(manualInputs)) {
+      input.addEventListener('change', syncManualStateFromInputs)
+      input.addEventListener('input', syncManualStateFromInputs)
+    }
+
+    manualCanvas.addEventListener('pointerdown', (event) => {
+      if (!manualState) return
+      dragMode = hitMode(canvasPoint(event))
+      if (dragMode) {
+        manualCanvas.style.cursor = 'grabbing'
+        manualCanvas.setPointerCapture(event.pointerId)
+      }
+    })
+
+    manualCanvas.addEventListener('pointermove', (event) => {
+      if (!manualState) return
+      if (!dragMode) {
+        updateManualCursor(event)
+        return
+      }
+      const point = canvasPoint(event)
+      if (dragMode === 'move') {
+        manualState.center_x = point.x
+        manualState.center_y = point.y
+      } else {
+        manualState[dragMode] = Math.hypot(point.x - manualState.center_x, point.y - manualState.center_y)
+      }
+      normalizeManualState()
+      drawManualCanvas()
+    })
+
+    manualCanvas.addEventListener('pointerup', (event) => {
+      dragMode = null
+      updateManualCursor(event)
+      try { manualCanvas.releasePointerCapture(event.pointerId) } catch (_) {}
+    })
+
+    manualCanvas.addEventListener('pointercancel', () => {
+      dragMode = null
+      manualCanvas.style.cursor = 'default'
+    })
+    manualCanvas.addEventListener('pointerleave', () => {
+      if (!dragMode) manualCanvas.style.cursor = 'default'
+    })
 
     function renderMetrics(m) {
       const items = [
@@ -338,6 +545,7 @@
           `run_id: ${data.run_id} | 保存目录: ${data.saved_dir || '-'}`
         renderMetrics(data.metrics)
         renderStages(data.image_urls, apiKey)
+        setupManualEditor(data.metrics, data.image_urls['00_original'])
         loadHistory(apiKey)
       } catch (err) {
         document.getElementById('errorBox').hidden = false
@@ -345,6 +553,48 @@
       } finally {
         btnAnalyze.disabled = false
         btnAnalyze.textContent = '开始识别并生成调试图'
+      }
+    }
+
+    document.getElementById('btnManualAnalyze').onclick = async () => {
+      if (!currentBlob || !manualState) return
+      const apiKey = keyInput.value.trim()
+      const skipQ = document.getElementById('skipQuality').checked
+      const btn = document.getElementById('btnManualAnalyze')
+      btn.disabled = true
+      btn.textContent = '人工调整识别中...'
+
+      const form = new FormData()
+      form.append('file', currentBlob, 'manual-adjustment.jpg')
+      form.append('manual_params', JSON.stringify(manualState))
+
+      try {
+        const url = `/debug/analyze/manual?skip_quality=${skipQ}&key=${encodeURIComponent(apiKey)}`
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'X-Debug-Key': apiKey },
+          body: form,
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          throw new Error(typeof data.detail === 'object'
+            ? JSON.stringify(data.detail, null, 2)
+            : (data.detail || res.statusText))
+        }
+        document.getElementById('resultContent').hidden = false
+        document.getElementById('gradeDisplay').textContent = `Grade ${data.metrics.grade}`
+        document.getElementById('runMeta').textContent =
+          `run_id: ${data.run_id} | 保存目录: ${data.saved_dir || '-'} | 人工调整`
+        renderMetrics(data.metrics)
+        renderStages(data.image_urls, apiKey)
+        setupManualEditor(data.metrics, data.image_urls['00_original'])
+        loadHistory(apiKey)
+      } catch (err) {
+        document.getElementById('errorBox').hidden = false
+        document.getElementById('errorBox').textContent = String(err.message || err)
+      } finally {
+        btn.disabled = false
+        btn.textContent = '应用人工调整并重新识别'
       }
     }
 

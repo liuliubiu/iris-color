@@ -190,6 +190,14 @@ def build_debug_metrics(pipeline: AnalysisPipelineResult, highlight_v: int) -> d
     return {
         "detection_method": det.method,
         "detection_mode": pipeline.detection_mode,
+        "manual_adjusted": det.method == "manual_adjustment",
+        "manual_params": {
+            "center_x": det.pupil_center[0] if det.pupil_center else None,
+            "center_y": det.pupil_center[1] if det.pupil_center else None,
+            "pupil_radius": det.pupil_radius,
+            "inner_radius": det.inner_radius,
+            "outer_radius": det.outer_radius,
+        } if det.method == "manual_adjustment" else None,
         "pupil_center": list(det.pupil_center) if det.pupil_center else None,
         "pupil_radius": det.pupil_radius,
         "inner_radius": det.inner_radius,

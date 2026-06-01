@@ -29,6 +29,17 @@ public class VisionClientService {
      * 将上传图片转发至 iris-vision /analyze，原样返回 JSON 字符串。
      */
     public String analyze(MultipartFile file) throws IOException {
+        return postAnalyze(file, "/analyze", null);
+    }
+
+    /**
+     * 将上传图片与人工调整参数转发至 iris-vision /analyze/manual，原样返回 JSON 字符串。
+     */
+    public String analyzeManual(MultipartFile file, String manualParams) throws IOException {
+        return postAnalyze(file, "/analyze/manual", manualParams);
+    }
+
+    private String postAnalyze(MultipartFile file, String path, String manualParams) throws IOException {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
 
@@ -40,9 +51,12 @@ public class VisionClientService {
                 return name != null ? name : "upload.jpg";
             }
         });
+        if (manualParams != null) {
+            body.add("manual_params", manualParams);
+        }
 
         HttpEntity<MultiValueMap<String, Object>> request = new HttpEntity<>(body, headers);
-        return restTemplate.postForObject(baseUrl + "/analyze", request, String.class);
+        return restTemplate.postForObject(baseUrl + path, request, String.class);
     }
 
     /**

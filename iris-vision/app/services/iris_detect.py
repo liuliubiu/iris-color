@@ -1,7 +1,7 @@
 """虹膜环带 mask 生成：支持眼部特写与全脸两种模式。"""
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Mapping, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -33,6 +33,62 @@ class IrisDetectionResult:
     iris_outer_method: Optional[str] = None
     candidate_count: Optional[int] = None
     candidate_mask: Optional[np.ndarray] = None
+
+
+def build_manual_iris_detection(
+    image_shape: Tuple[int, int],
+    params: Mapping[str, float],
+) -> Optional[IrisDetectionResult]:
+    """按人工调整参数直接生成虹膜环带 mask。"""
+    h, w = image_shape[:2]
+    min_dim = min(h, w)
+
+    try:
+        cx = float(params["center_x"])
+        cy = float(params["center_y"])
+        pupil_r = float(params["pupil_radius"])
+        inner_r = float(params["inner_radius"])
+        outer_r = float(params["outer_radius"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    values = [cx, cy, pupil_r, inner_r, outer_r]
+    if not all(np.isfinite(values)):
+        return None
+
+    cx = float(np.clip(cx, 0, w - 1))
+    cy = float(np.clip(cy, 0, h - 1))
+    pupil_r = float(np.clip(pupil_r, 2.0, min_dim * 0.45))
+    inner_r = float(np.clip(inner_r, pupil_r + 1.0, min_dim * 0.48))
+    outer_r = float(np.clip(outer_r, inner_r + 2.0, min_dim * 0.50))
+    if outer_r <= inner_r + 2:
+        return None
+
+    center = (int(round(cx)), int(round(cy)))
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.circle(mask, center, int(round(outer_r)), 255, -1)
+    cv2.circle(mask, center, int(round(inner_r)), 0, -1)
+    sample_count = int(np.count_nonzero(mask))
+    if sample_count <= 0:
+        return None
+
+    return IrisDetectionResult(
+        mask=mask,
+        center=center,
+        radius=outer_r,
+        eye_side="manual",
+        sample_pixel_count=sample_count,
+        method="manual_adjustment",
+        pupil_center=center,
+        pupil_radius=pupil_r,
+        inner_radius=inner_r,
+        outer_radius=outer_r,
+        pupil_confidence=1.0,
+        iris_confidence=1.0,
+        pupil_method="manual_adjustment",
+        iris_outer_method="manual_adjustment",
+        candidate_count=0,
+    )
 
 
 def _landmark_to_pixel(landmark, width: int, height: int) -> Tuple[int, int]:
