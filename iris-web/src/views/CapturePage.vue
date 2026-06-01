@@ -23,6 +23,7 @@ let mediaStream: MediaStream | null = null
 let adjustImage: HTMLImageElement | null = null
 type DragMode = 'move' | 'pupil_radius' | 'inner_radius' | 'outer_radius'
 let dragMode: DragMode | null = null
+let dragOffset = { x: 0, y: 0 }
 
 const gradeLabels: Record<number, string> = {
   1: '最浅',
@@ -185,9 +186,10 @@ function drawAdjustCanvas() {
   if (!canvas || !p || !adjustImage) return
   const ctx = canvas.getContext('2d')
   if (!ctx) return
+  const uiScale = canvasUiScale()
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   ctx.drawImage(adjustImage, 0, 0)
-  ctx.lineWidth = Math.max(2, canvas.width / 240)
+  ctx.lineWidth = Math.max(2, 3 * uiScale)
   ctx.fillStyle = 'rgba(0, 255, 255, 0.18)'
   ctx.beginPath()
   ctx.arc(p.center_x, p.center_y, p.outer_radius, 0, Math.PI * 2)
@@ -196,12 +198,13 @@ function drawAdjustCanvas() {
   drawCircle(ctx, p.center_x, p.center_y, p.pupil_radius, '#2f81f7')
   drawCircle(ctx, p.center_x, p.center_y, p.inner_radius, '#ff4d4f')
   drawCircle(ctx, p.center_x, p.center_y, p.outer_radius, '#3fb950')
+  const crossHalf = 12 * uiScale
   ctx.strokeStyle = '#ff4d4f'
   ctx.beginPath()
-  ctx.moveTo(p.center_x - 8, p.center_y)
-  ctx.lineTo(p.center_x + 8, p.center_y)
-  ctx.moveTo(p.center_x, p.center_y - 8)
-  ctx.lineTo(p.center_x, p.center_y + 8)
+  ctx.moveTo(p.center_x - crossHalf, p.center_y)
+  ctx.lineTo(p.center_x + crossHalf, p.center_y)
+  ctx.moveTo(p.center_x, p.center_y - crossHalf)
+  ctx.lineTo(p.center_x, p.center_y + crossHalf)
   ctx.stroke()
 }
 
@@ -222,16 +225,33 @@ function canvasPoint(event: PointerEvent) {
   }
 }
 
+function canvasUiScale() {
+  const canvas = adjustCanvasRef.value
+  if (!canvas) return 1
+  const rect = canvas.getBoundingClientRect()
+  if (!rect.width || !rect.height) return 1
+  const scaleX = canvas.width / rect.width
+  const scaleY = canvas.height / rect.height
+  return (scaleX + scaleY) / 2
+}
+
 function hitMode(point: { x: number; y: number }) {
   const p = manualParams.value
   const canvas = adjustCanvasRef.value
   if (!p || !canvas) return null
-  const dist = Math.hypot(point.x - p.center_x, point.y - p.center_y)
-  const tol = Math.max(8, canvas.width / 80)
-  if (dist < tol) return 'move'
-  if (Math.abs(dist - p.pupil_radius) < tol) return 'pupil_radius'
-  if (Math.abs(dist - p.inner_radius) < tol) return 'inner_radius'
-  if (Math.abs(dist - p.outer_radius) < tol) return 'outer_radius'
+  const dx = point.x - p.center_x
+  const dy = point.y - p.center_y
+  const dist = Math.hypot(dx, dy)
+  const uiScale = canvasUiScale()
+  const lineTol = Math.max(6 * uiScale, 4)
+  const crossTol = Math.max(5 * uiScale, 3)
+  const crossHalf = 12 * uiScale
+  const onHorizontalCross = Math.abs(dy) <= crossTol && Math.abs(dx) <= crossHalf
+  const onVerticalCross = Math.abs(dx) <= crossTol && Math.abs(dy) <= crossHalf
+  if (onHorizontalCross || onVerticalCross) return 'move'
+  if (Math.abs(dist - p.pupil_radius) <= lineTol) return 'pupil_radius'
+  if (Math.abs(dist - p.inner_radius) <= lineTol) return 'inner_radius'
+  if (Math.abs(dist - p.outer_radius) <= lineTol) return 'outer_radius'
   return null
 }
 
@@ -244,8 +264,13 @@ function updateAdjustCursor(event: PointerEvent) {
 }
 
 function onAdjustPointerDown(event: PointerEvent) {
-  dragMode = hitMode(canvasPoint(event))
+  const point = canvasPoint(event)
+  dragMode = hitMode(point)
   if (dragMode) {
+    const p = manualParams.value
+    dragOffset = p && dragMode === 'move'
+      ? { x: point.x - p.center_x, y: point.y - p.center_y }
+      : { x: 0, y: 0 }
     adjustCursor.value = 'grabbing'
     adjustCanvasRef.value?.setPointerCapture(event.pointerId)
   }
@@ -260,8 +285,8 @@ function onAdjustPointerMove(event: PointerEvent) {
   }
   const point = canvasPoint(event)
   if (dragMode === 'move') {
-    p.center_x = point.x
-    p.center_y = point.y
+    p.center_x = point.x - dragOffset.x
+    p.center_y = point.y - dragOffset.y
   } else {
     p[dragMode] = Math.hypot(point.x - p.center_x, point.y - p.center_y)
   }
@@ -533,7 +558,7 @@ onBeforeUnmount(() => {
 
 .camera-box {
   width: 100%;
-  aspect-ratio: 4 / 3;
+  min-height: 240px;
   background: #000;
   border-radius: 8px;
   overflow: hidden;
@@ -543,14 +568,16 @@ onBeforeUnmount(() => {
 }
 
 .camera-video,
-.preview-img,
-.adjust-canvas {
+.preview-img {
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  height: auto;
+  display: block;
 }
 
 .adjust-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
   cursor: default;
   touch-action: none;
 }
