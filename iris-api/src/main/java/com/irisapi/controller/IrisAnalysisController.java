@@ -43,26 +43,29 @@ public class IrisAnalysisController {
     }
 
     @PostMapping(value = "/iris/analyze", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> analyze(@RequestParam("file") MultipartFile file) {
-        return analyzeInternal(file, null);
+    public ResponseEntity<String> analyze(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(name = "skip_quality", defaultValue = "false") boolean skipQuality) {
+        return analyzeInternal(file, null, skipQuality);
     }
 
     @PostMapping(value = "/iris/analyze/manual", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> analyzeManual(
             @RequestParam("file") MultipartFile file,
-            @RequestParam("manual_params") String manualParams) {
-        return analyzeInternal(file, manualParams);
+            @RequestParam("manual_params") String manualParams,
+            @RequestParam(name = "skip_quality", defaultValue = "false") boolean skipQuality) {
+        return analyzeInternal(file, manualParams, skipQuality);
     }
 
-    private ResponseEntity<String> analyzeInternal(MultipartFile file, String manualParams) {
+    private ResponseEntity<String> analyzeInternal(MultipartFile file, String manualParams, boolean skipQuality) {
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().body("{\"success\":false,\"error\":\"empty_file\"}");
         }
 
         try {
             String response = manualParams == null
-                    ? visionClientService.analyze(file)
-                    : visionClientService.analyzeManual(file, manualParams);
+                    ? visionClientService.analyze(file, skipQuality)
+                    : visionClientService.analyzeManual(file, manualParams, skipQuality);
             return ResponseEntity.ok(response);
         } catch (HttpClientErrorException | HttpServerErrorException ex) {
             return ResponseEntity.status(ex.getStatusCode())

@@ -490,11 +490,19 @@
       ).join('')
     }
 
-    function renderStages(imageUrls, apiKey) {
+    function imageSourcesFromResponse(data) {
+      const sources = { ...(data.image_urls || {}) }
+      for (const [key, value] of Object.entries(data.images_base64 || {})) {
+        sources[key] = `data:image/jpeg;base64,${value}`
+      }
+      return sources
+    }
+
+    function renderStages(imageSources) {
       const order = Object.keys(STAGE_LABELS)
       document.getElementById('stagesGrid').innerHTML = order
-        .filter((k) => imageUrls[k])
-        .map((k) => `<div class="stage"><h3>${STAGE_LABELS[k]}</h3><img src="${imageUrls[k]}" alt="${k}"/></div>`)
+        .filter((k) => imageSources[k])
+        .map((k) => `<div class="stage"><h3>${STAGE_LABELS[k]}</h3><img src="${imageSources[k]}" alt="${k}"/></div>`)
         .join('')
     }
 
@@ -542,10 +550,13 @@
         document.getElementById('resultContent').hidden = false
         document.getElementById('gradeDisplay').textContent = `Grade ${data.metrics.grade}`
         document.getElementById('runMeta').textContent =
-          `run_id: ${data.run_id} | 保存目录: ${data.saved_dir || '-'}`
+          data.run_id
+            ? `run_id: ${data.run_id} | 保存目录: ${data.saved_dir || '-'}`
+            : '未保存到本地；阶段图由本次响应直接展示'
+        const imageSources = imageSourcesFromResponse(data)
         renderMetrics(data.metrics)
-        renderStages(data.image_urls, apiKey)
-        setupManualEditor(data.metrics, data.image_urls['00_original'])
+        renderStages(imageSources)
+        setupManualEditor(data.metrics, imageSources['00_original'])
         loadHistory(apiKey)
       } catch (err) {
         document.getElementById('errorBox').hidden = false
@@ -584,10 +595,13 @@
         document.getElementById('resultContent').hidden = false
         document.getElementById('gradeDisplay').textContent = `Grade ${data.metrics.grade}`
         document.getElementById('runMeta').textContent =
-          `run_id: ${data.run_id} | 保存目录: ${data.saved_dir || '-'} | 人工调整`
+          data.run_id
+            ? `run_id: ${data.run_id} | 保存目录: ${data.saved_dir || '-'} | 人工调整`
+            : '未保存到本地；阶段图由本次响应直接展示 | 人工调整'
+        const imageSources = imageSourcesFromResponse(data)
         renderMetrics(data.metrics)
-        renderStages(data.image_urls, apiKey)
-        setupManualEditor(data.metrics, data.image_urls['00_original'])
+        renderStages(imageSources)
+        setupManualEditor(data.metrics, imageSources['00_original'])
         loadHistory(apiKey)
       } catch (err) {
         document.getElementById('errorBox').hidden = false

@@ -68,6 +68,7 @@ def _build_debug_response(
     highlight_v = config.get("highlight_v_threshold", 240)
     eye_cfg = config.get("eye_closeup", {})
     images = build_debug_images(image_bgr, pipeline, eye_cfg)
+    all_images = {"00_original": image_bgr, **images}
     metrics = build_debug_metrics(pipeline, highlight_v)
 
     run_id = None
@@ -83,11 +84,17 @@ def _build_debug_response(
     if run_id:
         image_urls = {
             name: f"/debug/files/{run_id}/{name}.jpg?key={api_key}"
-            for name in ["00_original"] + list(images.keys())
+            for name in all_images.keys()
         }
         image_urls["metrics"] = f"/debug/files/{run_id}/metrics.json?key={api_key}"
 
     viewer_url = f"/debug/viewer/{run_id}?key={api_key}" if run_id else None
+
+    message = (
+        "debug run saved; open viewer_url in browser"
+        if run_id
+        else "debug run generated without disk output"
+    )
 
     return DebugAnalysisResponse(
         success=True,
@@ -96,8 +103,8 @@ def _build_debug_response(
         viewer_url=viewer_url,
         metrics=metrics,
         image_urls=image_urls,
-        images_base64=images_to_base64(images) if include_base64 else None,
-        message="debug run saved; open viewer_url in browser",
+        images_base64=images_to_base64(all_images) if include_base64 or not run_id else None,
+        message=message,
     )
 
 

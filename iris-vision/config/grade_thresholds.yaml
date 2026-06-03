@@ -31,5 +31,5 @@ highlight_v_threshold: 240
 debug:
   enabled: true
   api_key: iris-color-dev
-  save_to_disk: true
+  save_to_disk: false
   output_dir: debug_output

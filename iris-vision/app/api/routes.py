@@ -5,7 +5,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from app.models.schemas import (
     AnalysisResponse,
@@ -123,7 +123,10 @@ def health() -> HealthResponse:
     response_model=AnalysisResponse,
     responses={400: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
 )
-async def analyze(file: UploadFile = File(...)) -> AnalysisResponse:
+async def analyze(
+    file: UploadFile = File(...),
+    skip_quality: bool = Query(False, description="跳过模糊/过曝质量门槛，直接尝试识别"),
+) -> AnalysisResponse:
     """上传眼部特写，返回 CIELAB 与 Grade（无调试信息）。"""
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="file_must_be_image")
@@ -136,7 +139,7 @@ async def analyze(file: UploadFile = File(...)) -> AnalysisResponse:
     image_bgr = _decode_image(content)
 
     try:
-        result = run_analysis(image_bgr, config, CONFIG_PATH)
+        result = run_analysis(image_bgr, config, CONFIG_PATH, skip_quality=skip_quality)
     except AnalysisError as exc:
         _raise_analysis_error(exc)
 
@@ -151,6 +154,7 @@ async def analyze(file: UploadFile = File(...)) -> AnalysisResponse:
 async def analyze_manual(
     file: UploadFile = File(...),
     manual_params: str = Form(..., description="JSON: center_x, center_y, pupil_radius, inner_radius, outer_radius"),
+    skip_quality: bool = Query(False, description="跳过模糊/过曝质量门槛，直接尝试识别"),
 ) -> AnalysisResponse:
     """上传眼部特写和人工调整参数，重新返回 CIELAB、颜色与 Grade。"""
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -165,7 +169,13 @@ async def analyze_manual(
     manual_detection = _parse_manual_params(manual_params)
 
     try:
-        result = run_analysis(image_bgr, config, CONFIG_PATH, manual_detection=manual_detection)
+        result = run_analysis(
+            image_bgr,
+            config,
+            CONFIG_PATH,
+            skip_quality=skip_quality,
+            manual_detection=manual_detection,
+        )
     except AnalysisError as exc:
         _raise_analysis_error(exc)
 

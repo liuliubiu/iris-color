@@ -18,6 +18,7 @@ const currentFile = ref<File | null>(null)
 const manualMode = ref(false)
 const manualParams = ref<DetectionInfo | null>(null)
 const adjustCursor = ref('default')
+const skipQuality = ref(false)
 
 let mediaStream: MediaStream | null = null
 let adjustImage: HTMLImageElement | null = null
@@ -106,7 +107,7 @@ async function uploadFile(file: File) {
   adjustImage = null
 
   try {
-    const data = await analyzeIris(file)
+    const data = await analyzeIris(file, skipQuality.value)
     if (data.success === false) {
       errorMsg.value = data.error || '分析失败'
     } else {
@@ -215,24 +216,55 @@ function drawCircle(ctx: CanvasRenderingContext2D, x: number, y: number, r: numb
   ctx.stroke()
 }
 
+function canvasDisplayMetrics() {
+  const canvas = adjustCanvasRef.value
+  if (!canvas) return null
+  const rect = canvas.getBoundingClientRect()
+  if (!rect.width || !rect.height || !canvas.width || !canvas.height) return null
+
+  const canvasRatio = canvas.width / canvas.height
+  const rectRatio = rect.width / rect.height
+  let contentWidth = rect.width
+  let contentHeight = rect.height
+  let offsetX = 0
+  let offsetY = 0
+
+  if (getComputedStyle(canvas).objectFit === 'contain') {
+    if (rectRatio > canvasRatio) {
+      contentHeight = rect.height
+      contentWidth = contentHeight * canvasRatio
+      offsetX = (rect.width - contentWidth) / 2
+    } else {
+      contentWidth = rect.width
+      contentHeight = contentWidth / canvasRatio
+      offsetY = (rect.height - contentHeight) / 2
+    }
+  }
+
+  return {
+    left: rect.left + offsetX,
+    top: rect.top + offsetY,
+    width: contentWidth,
+    height: contentHeight,
+    scaleX: canvas.width / contentWidth,
+    scaleY: canvas.height / contentHeight,
+  }
+}
+
 function canvasPoint(event: PointerEvent) {
   const canvas = adjustCanvasRef.value
-  if (!canvas) return { x: 0, y: 0 }
-  const rect = canvas.getBoundingClientRect()
+  const metrics = canvasDisplayMetrics()
+  if (!canvas || !metrics) return { x: 0, y: 0 }
   return {
-    x: (event.clientX - rect.left) * canvas.width / rect.width,
-    y: (event.clientY - rect.top) * canvas.height / rect.height,
+    x: (event.clientX - metrics.left) * metrics.scaleX,
+    y: (event.clientY - metrics.top) * metrics.scaleY,
   }
 }
 
 function canvasUiScale() {
-  const canvas = adjustCanvasRef.value
-  if (!canvas) return 1
-  const rect = canvas.getBoundingClientRect()
-  if (!rect.width || !rect.height) return 1
-  const scaleX = canvas.width / rect.width
-  const scaleY = canvas.height / rect.height
-  return (scaleX + scaleY) / 2
+  const metrics = canvasDisplayMetrics()
+  if (!metrics) return 1
+  return (metrics.scaleX + metrics.scaleY) / 2
 }
 
 function hitMode(point: { x: number; y: number }) {
@@ -243,11 +275,12 @@ function hitMode(point: { x: number; y: number }) {
   const dy = point.y - p.center_y
   const dist = Math.hypot(dx, dy)
   const uiScale = canvasUiScale()
-  const lineTol = Math.max(6 * uiScale, 4)
-  const crossTol = Math.max(5 * uiScale, 3)
+  const lineTol = Math.max(12 * uiScale, 8)
+  const crossTol = Math.max(10 * uiScale, 6)
   const crossHalf = 12 * uiScale
   const onHorizontalCross = Math.abs(dy) <= crossTol && Math.abs(dx) <= crossHalf
   const onVerticalCross = Math.abs(dx) <= crossTol && Math.abs(dy) <= crossHalf
+  if (dist <= crossTol) return 'move'
   if (onHorizontalCross || onVerticalCross) return 'move'
   if (Math.abs(dist - p.pupil_radius) <= lineTol) return 'pupil_radius'
   if (Math.abs(dist - p.inner_radius) <= lineTol) return 'inner_radius'
@@ -315,7 +348,7 @@ async function analyzeWithManualParams() {
   manualLoading.value = true
   errorMsg.value = ''
   try {
-    const data = await analyzeIrisManual(currentFile.value, manualParams.value)
+    const data = await analyzeIrisManual(currentFile.value, manualParams.value, skipQuality.value)
     if (data.success === false) {
       errorMsg.value = data.error || '人工调整分析失败'
     } else {
@@ -417,6 +450,9 @@ onBeforeUnmount(() => {
           <el-button v-if="result?.detection && previewUrl" size="large" @click="startManualAdjust">
             人工校准区域
           </el-button>
+          <el-checkbox v-model="skipQuality" class="quality-toggle">
+            跳过质量检测
+          </el-checkbox>
         </div>
 
         <div v-if="manualMode && manualParams" class="manual-panel">
@@ -754,8 +790,14 @@ onBeforeUnmount(() => {
 .actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 12px;
   margin-top: 18px;
+}
+
+.quality-toggle {
+  min-height: 40px;
+  padding: 0 8px;
 }
 
 .manual-panel {

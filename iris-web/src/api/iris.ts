@@ -50,12 +50,13 @@ const api = axios.create({
   timeout: 60000,
 })
 
-export async function analyzeIris(file: File): Promise<AnalysisResult> {
+export async function analyzeIris(file: File, skipQuality = false): Promise<AnalysisResult> {
   const formData = new FormData()
   formData.append('file', file)
 
   const response = await api.post<AnalysisResult>('/iris/analyze', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    params: { skip_quality: skipQuality },
   })
   return response.data
 }
@@ -63,6 +64,7 @@ export async function analyzeIris(file: File): Promise<AnalysisResult> {
 export async function analyzeIrisManual(
   file: File,
   manualParams: DetectionInfo,
+  skipQuality = false,
 ): Promise<AnalysisResult> {
   const formData = new FormData()
   formData.append('file', file)
@@ -76,6 +78,7 @@ export async function analyzeIrisManual(
 
   const response = await api.post<AnalysisResult>('/iris/analyze/manual', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    params: { skip_quality: skipQuality },
   })
   return response.data
 }

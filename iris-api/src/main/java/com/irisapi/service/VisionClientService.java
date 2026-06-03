@@ -28,18 +28,22 @@ public class VisionClientService {
     /**
      * 将上传图片转发至 iris-vision /analyze，原样返回 JSON 字符串。
      */
-    public String analyze(MultipartFile file) throws IOException {
-        return postAnalyze(file, "/analyze", null);
+    public String analyze(MultipartFile file, boolean skipQuality) throws IOException {
+        return postAnalyze(file, "/analyze", null, skipQuality);
     }
 
     /**
      * 将上传图片与人工调整参数转发至 iris-vision /analyze/manual，原样返回 JSON 字符串。
      */
-    public String analyzeManual(MultipartFile file, String manualParams) throws IOException {
-        return postAnalyze(file, "/analyze/manual", manualParams);
+    public String analyzeManual(MultipartFile file, String manualParams, boolean skipQuality) throws IOException {
+        return postAnalyze(file, "/analyze/manual", manualParams, skipQuality);
     }
 
-    private String postAnalyze(MultipartFile file, String path, String manualParams) throws IOException {
+    private String postAnalyze(
+            MultipartFile file,
+            String path,
+            String manualParams,
+            boolean skipQuality) throws IOException {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
 
@@ -56,7 +60,7 @@ public class VisionClientService {
         }
 
         HttpEntity<MultiValueMap<String, Object>> request = new HttpEntity<>(body, headers);
-        return restTemplate.postForObject(baseUrl + path, request, String.class);
+        return restTemplate.postForObject(baseUrl + path + "?skip_quality=" + skipQuality, request, String.class);
     }
 
     /**
