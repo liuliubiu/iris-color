@@ -1,15 +1,16 @@
 # L* 分档边界（上界，不含该值则进入更深档）
-boundaries: [32, 24, 19, 13]
+boundaries: [30, 21, 19, 13]  
 
 # 定位模式: eye_closeup（默认，眼部特写）| face（全脸）| auto（先特写后全脸）
 detection:
   mode: eye_closeup
 
+
 # 眼部特写：瞳孔 → 虹膜环带（相对瞳孔半径的倍数）
 eye_closeup:
   center_roi_ratio: 0.85
   pupil_dark_percentile: 12.0
-  inner_pupil_multiplier: 1.15
+  inner_pupil_multiplier: 1.15  
   outer_pupil_multiplier: 2.8
   inner_iris_ratio: 0.35
   outer_iris_ratio: 0.85

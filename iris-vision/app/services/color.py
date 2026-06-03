@@ -106,7 +106,7 @@ def classify_iris_color(lab: LabResult, config: dict | None = None) -> IrisColor
     green_a_max = thresholds.get("green_a_max", -3.0)
     green_b_min = thresholds.get("green_b_min", -5.0)
     green_b_max = thresholds.get("green_b_max", 35.0)
-    dark_brown_l_max = thresholds.get("dark_brown_l_max", 36.0)
+    dark_brown_l_max = thresholds.get("dark_brown_l_max", 19.0)
 
     l_star = lab.L
     a_star = lab.a
