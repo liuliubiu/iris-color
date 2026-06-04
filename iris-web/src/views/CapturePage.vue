@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { analyzeIris, analyzeIrisManual, type AnalysisResult, type DetectionInfo } from '../api/iris'
+import {
+  analyzeIris,
+  analyzeIrisManual,
+  type AnalysisResult,
+  type DetectionInfo,
+  type DetectMode,
+} from '../api/iris'
 
 const videoRef = ref<HTMLVideoElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -19,6 +25,7 @@ const manualMode = ref(false)
 const manualParams = ref<DetectionInfo | null>(null)
 const adjustCursor = ref('default')
 const skipQuality = ref(false)
+const detectMode = ref<DetectMode>('auto')
 
 let mediaStream: MediaStream | null = null
 let adjustImage: HTMLImageElement | null = null
@@ -113,7 +120,7 @@ async function uploadFile(file: File) {
   adjustImage = null
 
   try {
-    const data = await analyzeIris(file, skipQuality.value)
+    const data = await analyzeIris(file, skipQuality.value, detectMode.value)
     if (data.success === false) {
       errorMsg.value = data.error || '分析失败'
     } else {
@@ -471,6 +478,14 @@ onBeforeUnmount(() => {
           <el-checkbox v-model="skipQuality" class="quality-toggle">
             跳过质量检测
           </el-checkbox>
+          <div class="mode-toggle">
+            <span class="mode-label">识别模式</span>
+            <el-radio-group v-model="detectMode" size="small" @change="reanalyze">
+              <el-radio-button value="auto">自动</el-radio-button>
+              <el-radio-button value="precise">清晰精定位</el-radio-button>
+              <el-radio-button value="rough">实拍粗略</el-radio-button>
+            </el-radio-group>
+          </div>
         </div>
 
         <div v-if="manualMode && manualParams" class="manual-panel">
@@ -816,6 +831,19 @@ onBeforeUnmount(() => {
 .quality-toggle {
   min-height: 40px;
   padding: 0 8px;
+}
+
+.mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 8px;
+}
+
+.mode-label {
+  font-size: 14px;
+  color: var(--el-text-color-regular, #606266);
 }
 
 .manual-panel {

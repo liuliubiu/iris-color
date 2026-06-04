@@ -6,7 +6,13 @@ from typing import Mapping, Optional, Tuple
 import cv2
 import numpy as np
 
-from app.services.eye_iris_detect import build_refined_iris_ring, detect_pupil
+from app.services.eye_iris_detect import (
+    build_refined_iris_ring,
+    build_ring_from_disk,
+    detect_iris_disk,
+    detect_pupil,
+    suppress_specular,
+)
 from app.services.face_landmarker import detect_face_landmarks
 
 _LEFT_IRIS_CENTER = 468
@@ -173,24 +179,22 @@ def _detect_from_face_landmarks(
     return None
 
 
-def _detect_from_eye_closeup(
-    image_bgr: np.ndarray,
+def _detect_precise(
+    detect_image: np.ndarray,
+    full_shape: Tuple[int, int],
     eye_cfg: dict,
 ) -> Optional[IrisDetectionResult]:
-    """
-    眼部特写模式：画面主体即为眼睛，通过瞳孔定位虹膜环带。
-    不依赖全脸检测。
-    """
+    """阶段A：瞳孔精定位 + 径向梯度虹膜外缘（适合清晰分离图）。"""
     pupil = detect_pupil(
-        image_bgr,
+        detect_image,
         center_roi_ratio=eye_cfg.get("center_roi_ratio", 0.85),
         dark_percentile=eye_cfg.get("pupil_dark_percentile", 12.0),
     )
-    if pupil is None:
+    if pupil is None or pupil.radius <= 0:
         return None
 
     ring = build_refined_iris_ring(
-        image_bgr,
+        detect_image,
         pupil,
         inner_pupil_multiplier=eye_cfg.get("inner_pupil_multiplier", 1.15),
         outer_pupil_multiplier=eye_cfg.get("outer_pupil_multiplier", 2.8),
@@ -203,7 +207,7 @@ def _detect_from_eye_closeup(
         radius=ring.outer_radius,
         eye_side="closeup",
         sample_pixel_count=ring.sample_pixel_count,
-        method="eye_closeup",
+        method="eye_closeup_precise",
         pupil_center=(pupil.center_x, pupil.center_y),
         pupil_radius=pupil.radius,
         inner_radius=ring.inner_radius,
@@ -217,30 +221,139 @@ def _detect_from_eye_closeup(
     )
 
 
+def _detect_rough(
+    detect_image: np.ndarray,
+    full_shape: Tuple[int, int],
+    eye_cfg: dict,
+) -> Optional[IrisDetectionResult]:
+    """阶段B：黑盘直检（适合瞳孔与虹膜融成一团黑的实拍图）。"""
+    disk_cfg = eye_cfg.get("disk", {})
+    disk = detect_iris_disk(
+        detect_image,
+        dark_percentile=disk_cfg.get("dark_percentile", 35.0),
+        min_radius_ratio=disk_cfg.get("min_radius_ratio", 0.12),
+        max_radius_ratio=disk_cfg.get("max_radius_ratio", 0.45),
+        circularity_min=disk_cfg.get("circularity_min", 0.55),
+        surround_contrast=disk_cfg.get("surround_contrast", 8.0),
+        surround_support_min=disk_cfg.get("surround_support_min", 0.45),
+        pupil_iris_ratio=eye_cfg.get("pupil_iris_ratio", 0.30),
+        sclera_min=disk_cfg.get("sclera_min", 0.10),
+        sclera_v_min=disk_cfg.get("sclera_v_min", 150.0),
+        sclera_s_max=disk_cfg.get("sclera_s_max", 60.0),
+    )
+    if disk is None:
+        return None
+
+    ring = build_ring_from_disk(
+        full_shape,
+        disk,
+        inner_iris_ratio=disk_cfg.get("inner_iris_ratio", 0.40),
+        outer_iris_ratio=disk_cfg.get("outer_iris_ratio", 0.85),
+    )
+    pupil_method = "iris_disk_estimated" if disk.pupil_estimated else "iris_disk_core"
+    return IrisDetectionResult(
+        mask=ring.mask,
+        center=(disk.center_x, disk.center_y),
+        radius=ring.outer_radius,
+        eye_side="closeup",
+        sample_pixel_count=ring.sample_pixel_count,
+        method="eye_closeup_disk",
+        pupil_center=(disk.center_x, disk.center_y),
+        pupil_radius=disk.pupil_radius,
+        inner_radius=ring.inner_radius,
+        outer_radius=ring.outer_radius,
+        pupil_confidence=disk.confidence,
+        iris_confidence=disk.confidence,
+        pupil_method=pupil_method,
+        iris_outer_method=ring.iris_outer_method,
+        candidate_count=0,
+        candidate_mask=disk.candidate_mask,
+    )
+
+
+def _precise_acceptable(result: IrisDetectionResult, min_confidence: float) -> bool:
+    """精定位是否可信：瞳孔置信度达标且虹膜外缘走了梯度而非倍数兜底。"""
+    if result is None or result.sample_pixel_count <= 0:
+        return False
+    pupil_conf = result.pupil_confidence or 0.0
+    return pupil_conf >= min_confidence and result.iris_outer_method == "radial_gradient"
+
+
+def _detect_from_eye_closeup(
+    image_bgr: np.ndarray,
+    eye_cfg: dict,
+    mode: str = "auto",
+) -> Optional[IrisDetectionResult]:
+    """
+    眼部特写模式：先做镜面反光修复，再两阶段定位虹膜环带。
+
+    mode:
+      - auto: 精定位置信度达标用 A，否则回退黑盘直检 B
+      - precise: 强制阶段A（清晰精定位）
+      - rough: 强制阶段B（实拍黑盘直检）
+    不依赖全脸检测。
+    """
+    specular_cfg = eye_cfg.get("specular", {})
+    if specular_cfg.get("enabled", True):
+        detect_image, _ = suppress_specular(
+            image_bgr,
+            v_threshold=specular_cfg.get("v_threshold", 230),
+            sat_threshold=specular_cfg.get("sat_threshold", 90),
+            max_area_ratio=specular_cfg.get("max_area_ratio", 0.04),
+            dilate_px=specular_cfg.get("dilate_px", 3),
+        )
+    else:
+        detect_image = image_bgr
+
+    full_shape = image_bgr.shape
+
+    if mode == "precise":
+        return _detect_precise(detect_image, full_shape, eye_cfg)
+    if mode == "rough":
+        return _detect_rough(detect_image, full_shape, eye_cfg)
+
+    # auto
+    min_confidence = eye_cfg.get("auto_precise_min_confidence", 0.5)
+    precise = _detect_precise(detect_image, full_shape, eye_cfg)
+    if precise is not None and _precise_acceptable(precise, min_confidence):
+        return precise
+
+    rough = _detect_rough(detect_image, full_shape, eye_cfg)
+    if rough is not None:
+        return rough
+    return precise
+
+
 def detect_iris_ring_mask(
     image_bgr: np.ndarray,
     mode: str = "eye_closeup",
     inner_ratio: float = 0.30,
     outer_ratio: float = 0.80,
     eye_closeup_cfg: Optional[dict] = None,
+    closeup_mode: str = "auto",
 ) -> Optional[IrisDetectionResult]:
     """
     检测虹膜环带 mask。
 
-    mode:
+    mode（定位来源）:
       - eye_closeup: 默认，适用于「眼睛占满画面」的拍照/上传图
       - face: 全脸图，MediaPipe 定位
       - auto: 先 eye_closeup，失败再 face
+
+    closeup_mode（眼部特写子策略）:
+      - auto: 精定位置信度达标用精定位，否则回退黑盘直检
+      - precise: 强制清晰精定位
+      - rough: 强制实拍黑盘直检
     """
     eye_cfg = eye_closeup_cfg or {}
 
     if mode == "eye_closeup":
-        return _detect_from_eye_closeup(image_bgr, eye_cfg)
+        return _detect_from_eye_closeup(image_bgr, eye_cfg, mode=closeup_mode)
     if mode == "face":
         return _detect_from_face_landmarks(image_bgr, inner_ratio, outer_ratio)
 
     # auto
-    result = _detect_from_eye_closeup(image_bgr, eye_cfg)
+    result = _detect_from_eye_closeup(image_bgr, eye_cfg, mode=closeup_mode)
     if result is not None:
         return result
     return _detect_from_face_landmarks(image_bgr, inner_ratio, outer_ratio)

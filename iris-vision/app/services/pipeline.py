@@ -53,6 +53,7 @@ def run_analysis(
     *,
     skip_quality: bool = False,
     manual_detection: Optional[dict] = None,
+    closeup_mode: str = "auto",
 ) -> AnalysisPipelineResult:
     """执行质量检测 → 定位 → 取色 → 分档。"""
     quality_cfg = config.get("quality", {})
@@ -81,6 +82,7 @@ def run_analysis(
             inner_ratio=ring_cfg.get("inner_ratio", 0.30),
             outer_ratio=ring_cfg.get("outer_ratio", 0.80),
             eye_closeup_cfg=eye_closeup_cfg,
+            closeup_mode=closeup_mode,
         )
     if detection is None:
         raise AnalysisError("no_iris_detected", quality)

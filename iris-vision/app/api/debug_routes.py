@@ -115,6 +115,7 @@ async def analyze_debug(
     key: Optional[str] = Query(None, description="与 X-Debug-Key 二选一，便于调试页表单提交"),
     skip_quality: bool = Query(False, description="跳过模糊/过曝质量门槛，便于测试糊图"),
     include_base64: bool = Query(False, description="是否在 JSON 内返回 base64 图片（体积大）"),
+    mode: str = Query("auto", description="眼部特写识别模式：auto/precise/rough"),
 ):
     """
     调试专用分析接口。
@@ -131,12 +132,14 @@ async def analyze_debug(
         raise HTTPException(status_code=400, detail="empty_file")
 
     image_bgr = _decode_image(content)
+    closeup_mode = mode if mode in ("auto", "precise", "rough") else "auto"
     try:
         pipeline = run_analysis(
             image_bgr,
             config,
             CONFIG_PATH,
             skip_quality=skip_quality,
+            closeup_mode=closeup_mode,
         )
     except AnalysisError as exc:
         detail = {"success": False, "error": exc.code}

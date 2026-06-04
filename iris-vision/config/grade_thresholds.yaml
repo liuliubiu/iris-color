@@ -15,6 +15,33 @@ eye_closeup:
   inner_iris_ratio: 0.35
   outer_iris_ratio: 0.85
 
+  # 自动切换：精定位瞳孔置信度低于此值时回退黑盘直检
+  auto_precise_min_confidence: 0.5
+  # 深色融合眼无法分出瞳孔时，按虹膜半径比例估算瞳孔
+  pupil_iris_ratio: 0.30
+
+  # 镜面反光修复（瞳孔亮环、屏幕/窗户反光）
+  specular:
+    enabled: true
+    v_threshold: 230      # 亮度高于此值视为高光候选
+    sat_threshold: 90     # 且饱和度低于此值才算镜面反光
+    max_area_ratio: 0.04  # 单个亮斑面积占比上限，超过视为巩膜/皮肤不修复
+    dilate_px: 3
+
+  # 黑盘直检（实拍粗略模式核心）
+  disk:
+    dark_percentile: 35.0
+    min_radius_ratio: 0.10
+    max_radius_ratio: 0.45
+    circularity_min: 0.55
+    surround_contrast: 22.0     # 外侧(巩膜)需比盘内(虹膜)平均亮多少；区分虹膜与眉毛的关键
+    surround_support_min: 0.45  # 满足反差的角度比例下限
+    sclera_min: 0.10            # 偏白巩膜占比（仅作加分项，不再硬门槛）
+    sclera_v_min: 150.0         # 巩膜判定：亮度高于此值
+    sclera_s_max: 60.0          # 巩膜判定：饱和度低于此值
+    inner_iris_ratio: 0.40      # 环带内缘（扣掉瞳孔）
+    outer_iris_ratio: 0.85      # 环带外缘（留在虹膜中段）
+
 # 全脸模式环带比例（相对 iris landmark 半径，仅 mode=face/auto 时使用）
 iris_ring:
   inner_ratio: 0.30

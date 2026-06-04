@@ -50,13 +50,19 @@ const api = axios.create({
   timeout: 60000,
 })
 
-export async function analyzeIris(file: File, skipQuality = false): Promise<AnalysisResult> {
+export type DetectMode = 'auto' | 'precise' | 'rough'
+
+export async function analyzeIris(
+  file: File,
+  skipQuality = false,
+  mode: DetectMode = 'auto',
+): Promise<AnalysisResult> {
   const formData = new FormData()
   formData.append('file', file)
 
   const response = await api.post<AnalysisResult>('/iris/analyze', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    params: { skip_quality: skipQuality },
+    params: { skip_quality: skipQuality, mode },
   })
   return response.data
 }

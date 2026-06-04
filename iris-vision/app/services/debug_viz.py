@@ -50,13 +50,19 @@ def draw_pupil_localization(
 
     cx, cy = detection.pupil_center
     pr = detection.pupil_radius or 5
-    cv2.circle(out, (cx, cy), int(pr), (255, 120, 0), 2)
+    estimated = (detection.pupil_method or "").endswith("estimated")
+    pupil_color = (0, 165, 255) if estimated else (255, 120, 0)
+    cv2.circle(out, (cx, cy), int(pr), pupil_color, 2)
     cv2.drawMarker(out, (cx, cy), (0, 0, 255), cv2.MARKER_CROSS, 14, 2)
     pupil_label = f"pupil r={pr:.1f}"
+    if estimated:
+        pupil_label += " (estimated)"
     if detection.pupil_confidence is not None:
         pupil_label += f" conf={detection.pupil_confidence:.2f}"
     cv2.putText(out, pupil_label, (cx + 8, cy - 8),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 120, 0), 1, cv2.LINE_AA)
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, pupil_color, 1, cv2.LINE_AA)
+    cv2.putText(out, f"method={detection.method}", (12, out.shape[0] - 12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
     return out
 
 

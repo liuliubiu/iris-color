@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -30,6 +31,16 @@ def _decode_image(content: bytes) -> np.ndarray:
     if image is None:
         raise HTTPException(status_code=400, detail="invalid_image_format")
     return image
+
+
+_ALLOWED_MODES = {"auto", "precise", "rough"}
+
+
+def _normalize_mode(mode: Optional[str]) -> str:
+    """校验眼部特写识别模式，非法值回落到 auto。"""
+    if mode and mode in _ALLOWED_MODES:
+        return mode
+    return "auto"
 
 
 def _parse_manual_params(raw: str) -> dict:
@@ -126,6 +137,7 @@ def health() -> HealthResponse:
 async def analyze(
     file: UploadFile = File(...),
     skip_quality: bool = Query(False, description="跳过模糊/过曝质量门槛，直接尝试识别"),
+    mode: str = Query("auto", description="眼部特写识别模式：auto/precise/rough"),
 ) -> AnalysisResponse:
     """上传眼部特写，返回 CIELAB 与 Grade（无调试信息）。"""
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -137,9 +149,16 @@ async def analyze(
 
     config = load_config(CONFIG_PATH)
     image_bgr = _decode_image(content)
+    closeup_mode = _normalize_mode(mode)
 
     try:
-        result = run_analysis(image_bgr, config, CONFIG_PATH, skip_quality=skip_quality)
+        result = run_analysis(
+            image_bgr,
+            config,
+            CONFIG_PATH,
+            skip_quality=skip_quality,
+            closeup_mode=closeup_mode,
+        )
     except AnalysisError as exc:
         _raise_analysis_error(exc)
 
