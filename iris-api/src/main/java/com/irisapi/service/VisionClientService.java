@@ -8,6 +8,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -28,22 +29,27 @@ public class VisionClientService {
     /**
      * 将上传图片转发至 iris-vision /analyze，原样返回 JSON 字符串。
      */
-    public String analyze(MultipartFile file, boolean skipQuality) throws IOException {
-        return postAnalyze(file, "/analyze", null, skipQuality);
+    public String analyze(MultipartFile file, boolean skipQuality, String detectionMode) throws IOException {
+        return postAnalyze(file, "/analyze", null, skipQuality, detectionMode);
     }
 
     /**
      * 将上传图片与人工调整参数转发至 iris-vision /analyze/manual，原样返回 JSON 字符串。
      */
-    public String analyzeManual(MultipartFile file, String manualParams, boolean skipQuality) throws IOException {
-        return postAnalyze(file, "/analyze/manual", manualParams, skipQuality);
+    public String analyzeManual(
+            MultipartFile file,
+            String manualParams,
+            boolean skipQuality,
+            String detectionMode) throws IOException {
+        return postAnalyze(file, "/analyze/manual", manualParams, skipQuality, detectionMode);
     }
 
     private String postAnalyze(
             MultipartFile file,
             String path,
             String manualParams,
-            boolean skipQuality) throws IOException {
+            boolean skipQuality,
+            String detectionMode) throws IOException {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
 
@@ -60,7 +66,11 @@ public class VisionClientService {
         }
 
         HttpEntity<MultiValueMap<String, Object>> request = new HttpEntity<>(body, headers);
-        return restTemplate.postForObject(baseUrl + path + "?skip_quality=" + skipQuality, request, String.class);
+        String url = UriComponentsBuilder.fromUriString(baseUrl + path)
+                .queryParam("skip_quality", skipQuality)
+                .queryParam("detection_mode", detectionMode)
+                .toUriString();
+        return restTemplate.postForObject(url, request, String.class);
     }
 
     /**

@@ -49,6 +49,8 @@ def _parse_manual_params(raw: str) -> dict:
 def _build_result_debug_images(image_bgr: np.ndarray, result, config: dict) -> dict:
     images = build_debug_images(image_bgr, result, config.get("eye_closeup", {}))
     wanted = {
+        "00_candidate_regions": images["00_candidate_regions"],
+        "01_pupil_candidates": images["01_pupil_candidates"],
         "01_pupil_localization": images["01_pupil_localization"],
         "02_iris_ring": images["02_iris_ring"],
         "04_valid_samples": images["04_valid_samples"],
@@ -126,6 +128,7 @@ def health() -> HealthResponse:
 async def analyze(
     file: UploadFile = File(...),
     skip_quality: bool = Query(False, description="跳过模糊/过曝质量门槛，直接尝试识别"),
+    detection_mode: str | None = Query(None, description="定位模式：auto / eye_closeup / rough_closeup / face"),
 ) -> AnalysisResponse:
     """上传眼部特写，返回 CIELAB 与 Grade（无调试信息）。"""
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -139,7 +142,13 @@ async def analyze(
     image_bgr = _decode_image(content)
 
     try:
-        result = run_analysis(image_bgr, config, CONFIG_PATH, skip_quality=skip_quality)
+        result = run_analysis(
+            image_bgr,
+            config,
+            CONFIG_PATH,
+            skip_quality=skip_quality,
+            detection_mode=detection_mode,
+        )
     except AnalysisError as exc:
         _raise_analysis_error(exc)
 
@@ -155,6 +164,7 @@ async def analyze_manual(
     file: UploadFile = File(...),
     manual_params: str = Form(..., description="JSON: center_x, center_y, pupil_radius, inner_radius, outer_radius"),
     skip_quality: bool = Query(False, description="跳过模糊/过曝质量门槛，直接尝试识别"),
+    detection_mode: str | None = Query(None, description="定位模式：auto / eye_closeup / rough_closeup / face"),
 ) -> AnalysisResponse:
     """上传眼部特写和人工调整参数，重新返回 CIELAB、颜色与 Grade。"""
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -175,6 +185,7 @@ async def analyze_manual(
             CONFIG_PATH,
             skip_quality=skip_quality,
             manual_detection=manual_detection,
+            detection_mode=detection_mode,
         )
     except AnalysisError as exc:
         _raise_analysis_error(exc)

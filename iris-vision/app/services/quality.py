@@ -40,7 +40,10 @@ def compute_overexposed_ratio(image_bgr: np.ndarray, threshold: int = 250) -> fl
 def _is_eye_open_via_face(image_bgr: np.ndarray) -> bool:
     """全脸模式：用眼睑 landmark 判断睁眼。"""
     rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    landmarks = detect_face_landmarks(rgb)
+    try:
+        landmarks = detect_face_landmarks(rgb)
+    except (FileNotFoundError, RuntimeError, ValueError):
+        return True
     if landmarks is None:
         return True
 

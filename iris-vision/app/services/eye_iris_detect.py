@@ -32,6 +32,24 @@ class IrisRingEstimate:
     iris_confidence: float
 
 
+@dataclass
+class RoughIrisEstimate:
+    """低对比实拍图中的虹膜整体圆盘估计。"""
+
+    center_x: int
+    center_y: int
+    iris_radius: float
+    inner_radius: float
+    outer_radius: float
+    confidence: float
+    method: str
+    sample_pixel_count: int
+    candidate_count: int = 0
+    candidate_mask: Optional[np.ndarray] = None
+    highlight_mask: Optional[np.ndarray] = None
+    exclusion_mask: Optional[np.ndarray] = None
+
+
 def _preprocess_luminance(image_bgr: np.ndarray) -> np.ndarray:
     """用亮度通道做轻量归一化，降低局部光照对阈值的影响。"""
     hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
@@ -48,6 +66,291 @@ def _center_roi_bounds(shape: Tuple[int, int], ratio: float) -> Tuple[int, int, 
     x1 = (w - roi_w) // 2
     y1 = (h - roi_h) // 2
     return x1, y1, roi_w, roi_h
+
+
+def _build_highlight_mask(image_bgr: np.ndarray, v_threshold: int = 235) -> np.ndarray:
+    """检测角膜反光，供粗略定位时忽略或填补。"""
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    saturation = hsv[:, :, 1]
+    value = hsv[:, :, 2]
+    highlight = ((value >= v_threshold) & ((saturation <= 95) | (value >= 248))).astype(np.uint8) * 255
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    return cv2.dilate(highlight, kernel, iterations=1)
+
+
+def _skin_like_mask(image_bgr: np.ndarray) -> np.ndarray:
+    """粗略皮肤色掩码，用于惩罚落到皮肤/手指上的候选。"""
+    ycrcb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2YCrCb)
+    _, cr, cb = cv2.split(ycrcb)
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    hue = hsv[:, :, 0]
+    saturation = hsv[:, :, 1]
+    value = hsv[:, :, 2]
+    return (
+        (cr >= 133)
+        & (cr <= 180)
+        & (cb >= 70)
+        & (cb <= 140)
+        & (hue <= 35)
+        & (saturation >= 18)
+        & (value >= 45)
+    )
+
+
+def _circle_mask(shape: Tuple[int, int], center: Tuple[float, float], radius: float) -> np.ndarray:
+    mask = np.zeros(shape[:2], dtype=np.uint8)
+    cv2.circle(mask, (int(round(center[0])), int(round(center[1]))), int(round(max(radius, 1))), 255, -1)
+    return mask
+
+
+def _annulus_mask(
+    shape: Tuple[int, int],
+    center: Tuple[float, float],
+    inner_radius: float,
+    outer_radius: float,
+) -> np.ndarray:
+    outer = _circle_mask(shape, center, outer_radius)
+    inner = _circle_mask(shape, center, inner_radius)
+    outer[inner > 0] = 0
+    return outer
+
+
+def _mean_on_mask(values: np.ndarray, mask: np.ndarray, default: float = 0.0) -> float:
+    selected = values[mask > 0]
+    if selected.size == 0:
+        return default
+    return float(np.mean(selected))
+
+
+def _build_rough_iris_ring(
+    shape: Tuple[int, int],
+    center: Tuple[float, float],
+    iris_radius: float,
+    inner_ratio: float,
+    outer_ratio: float,
+) -> Tuple[np.ndarray, float, float, int]:
+    """按虹膜整体圆盘生成取色环带。"""
+    h, w = shape[:2]
+    min_dim = min(h, w)
+    cx = float(np.clip(center[0], 0, w - 1))
+    cy = float(np.clip(center[1], 0, h - 1))
+    iris_radius = float(np.clip(iris_radius, 3.0, min_dim * 0.48))
+    inner_r = max(iris_radius * inner_ratio, 2.0)
+    outer_r = min(iris_radius * outer_ratio, min_dim * 0.48)
+    if outer_r <= inner_r + 3:
+        inner_r = max(2.0, iris_radius * 0.22)
+        outer_r = min(iris_radius * 0.86, min_dim * 0.48)
+
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.circle(mask, (int(round(cx)), int(round(cy))), int(round(outer_r)), 255, -1)
+    cv2.circle(mask, (int(round(cx)), int(round(cy))), int(round(inner_r)), 0, -1)
+    return mask, float(inner_r), float(outer_r), int(np.count_nonzero(mask))
+
+
+def _score_rough_candidate(
+    image_bgr: np.ndarray,
+    luminance: np.ndarray,
+    skin_mask: np.ndarray,
+    highlight_mask: np.ndarray,
+    center: Tuple[float, float],
+    radius: float,
+    shape_score: float,
+) -> float:
+    """评分虹膜整体候选：暗圆盘、周围巩膜支持、皮肤/眉毛惩罚。"""
+    h, w = luminance.shape[:2]
+    min_dim = min(h, w)
+    cx, cy = center
+    if radius <= 1:
+        return -float("inf")
+    if cx - radius < 0 or cy - radius < 0 or cx + radius >= w or cy + radius >= h:
+        return -float("inf")
+
+    disk = _circle_mask(luminance.shape, center, radius * 0.92)
+    outer_ring = _annulus_mask(luminance.shape, center, radius * 1.05, radius * 1.65)
+    if int(np.count_nonzero(disk)) < 20 or int(np.count_nonzero(outer_ring)) < 20:
+        return -float("inf")
+
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    saturation = hsv[:, :, 1]
+    value = hsv[:, :, 2]
+    b_channel, g_channel, r_channel = cv2.split(image_bgr)
+    inside_lum = _mean_on_mask(luminance, disk, 255.0)
+    ring_lum = _mean_on_mask(luminance, outer_ring, inside_lum)
+    darkness = 1.0 - min(inside_lum / 255.0, 1.0)
+    contrast = float(np.clip((ring_lum - inside_lum) / 95.0, 0.0, 1.0))
+
+    sclera_pixels = outer_ring > 0
+    channel_spread = np.maximum.reduce([b_channel, g_channel, r_channel]) - np.minimum.reduce(
+        [b_channel, g_channel, r_channel]
+    )
+    sclera_like = (
+        (value >= 115)
+        & (saturation <= 70)
+        & (channel_spread <= 62)
+        & ~skin_mask
+    )
+    sclera_support = float(np.mean(sclera_like[sclera_pixels]))
+    skin_penalty = float(np.mean(skin_mask[disk > 0]))
+    outer_skin_penalty = float(np.mean(skin_mask[sclera_pixels]))
+    highlight_penalty = float(np.mean((highlight_mask > 0)[disk > 0]))
+
+    # 睫毛/眉毛通常是长条暗区，圆盘内垂直梯度强且周围缺少巩膜支持。
+    sobel_x = cv2.Sobel(luminance, cv2.CV_32F, 1, 0, ksize=3)
+    sobel_y = cv2.Sobel(luminance, cv2.CV_32F, 0, 1, ksize=3)
+    grad_ratio = _mean_on_mask(np.abs(sobel_x), disk, 0.0) / max(_mean_on_mask(np.abs(sobel_y), disk, 1.0), 1.0)
+    stripe_penalty = float(np.clip((grad_ratio - 2.4) / 2.0, 0.0, 1.0))
+
+    center_dist = (((cx - w / 2) ** 2 + (cy - h / 2) ** 2) ** 0.5) / max(min_dim, 1)
+    radius_prior = 1.0 - min(abs(radius - min_dim * 0.16) / max(min_dim * 0.16, 1.0), 1.0)
+    lower_half_bonus = 0.12 if cy > h * 0.42 else 0.0
+    portrait_top_penalty = 0.45 if h > w * 1.2 and cy < h * 0.38 else 0.0
+
+    return (
+        darkness * 1.6
+        + contrast * 1.15
+        + sclera_support * 1.45
+        + shape_score * 0.9
+        + radius_prior * 0.35
+        + lower_half_bonus
+        - center_dist * 0.75
+        - skin_penalty * 1.1
+        - outer_skin_penalty * 0.75
+        - highlight_penalty * 0.35
+        - stripe_penalty * 0.55
+        - portrait_top_penalty
+    )
+
+
+def detect_rough_iris_disk(
+    image_bgr: np.ndarray,
+    center_roi_ratio: float = 0.92,
+    dark_percentile: float = 32.0,
+    min_radius_ratio: float = 0.045,
+    max_radius_ratio: float = 0.32,
+    inner_iris_ratio: float = 0.24,
+    outer_iris_ratio: float = 0.86,
+    highlight_v_threshold: int = 235,
+) -> Optional[RoughIrisEstimate]:
+    """
+    低对比手机实拍模式：先找瞳孔+深色虹膜的整体暗圆盘，再生成取色环带。
+
+    该模式不要求瞳孔边界可分割，适合深棕虹膜、反光遮挡、普通手机近距离拍摄。
+    """
+    h, w = image_bgr.shape[:2]
+    min_dim = min(h, w)
+    min_r = max(min_dim * min_radius_ratio, 6.0)
+    max_r = max(min_dim * max_radius_ratio, min_r + 4.0)
+
+    luminance = _preprocess_luminance(image_bgr)
+    highlight_mask = _build_highlight_mask(image_bgr, highlight_v_threshold)
+    if np.any(highlight_mask):
+        luminance_for_dark = cv2.inpaint(luminance, highlight_mask, 5, cv2.INPAINT_TELEA)
+    else:
+        luminance_for_dark = luminance
+    luminance_for_dark = cv2.GaussianBlur(luminance_for_dark, (7, 7), 1.6)
+    skin_mask = _skin_like_mask(image_bgr)
+
+    x1, y1, roi_w, roi_h = _center_roi_bounds(luminance.shape, center_roi_ratio)
+    roi = luminance_for_dark[y1 : y1 + roi_h, x1 : x1 + roi_w]
+    otsu_threshold, _ = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    percentile_threshold = float(np.percentile(roi, np.clip(dark_percentile, 8.0, 55.0)))
+    thresh = min(max(percentile_threshold, 45.0), max(float(otsu_threshold) * 1.08, 70.0), 150.0)
+    dark_roi = (roi <= thresh).astype(np.uint8) * 255
+    dark_roi[highlight_mask[y1 : y1 + roi_h, x1 : x1 + roi_w] > 0] = 255
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    dark_roi = cv2.morphologyEx(dark_roi, cv2.MORPH_CLOSE, kernel, iterations=2)
+    dark_roi = cv2.morphologyEx(dark_roi, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+
+    candidates: list[Tuple[float, float, float, float]] = []
+    contours, _ = cv2.findContours(dark_roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < np.pi * min_r * min_r * 0.25:
+            continue
+        (_, _), enclosing_r = cv2.minEnclosingCircle(cnt)
+        equiv_r = (area / np.pi) ** 0.5
+        radius = float((enclosing_r + equiv_r) / 2.0)
+        if radius < min_r or radius > max_r:
+            continue
+        perimeter = cv2.arcLength(cnt, True)
+        if perimeter <= 0:
+            continue
+        circularity = float(np.clip(4.0 * np.pi * area / (perimeter * perimeter), 0.0, 1.0))
+        rect = cv2.minAreaRect(cnt)
+        side_a, side_b = rect[1]
+        aspect = max(side_a, side_b) / max(min(side_a, side_b), 1.0)
+        if circularity < 0.20 and aspect > 2.2:
+            continue
+        m = cv2.moments(cnt)
+        if m["m00"] == 0:
+            continue
+        cx = m["m10"] / m["m00"] + x1
+        cy = m["m01"] / m["m00"] + y1
+        shape_score = float(np.clip(circularity * 0.65 + (1.0 / max(aspect, 1.0)) * 0.35, 0.0, 1.0))
+        candidates.append((cx, cy, radius, shape_score))
+
+    hough = cv2.HoughCircles(
+        luminance_for_dark,
+        cv2.HOUGH_GRADIENT,
+        dp=1.25,
+        minDist=max(int(min_dim * 0.16), 16),
+        param1=70,
+        param2=14,
+        minRadius=int(min_r),
+        maxRadius=int(max_r),
+    )
+    if hough is not None:
+        for cx, cy, radius in hough[0]:
+            if x1 <= cx <= x1 + roi_w and y1 <= cy <= y1 + roi_h:
+                candidates.append((float(cx), float(cy), float(radius), 0.72))
+
+    candidate_mask = np.zeros_like(luminance, dtype=np.uint8)
+    best: Optional[Tuple[float, float, float, float, float]] = None
+    best_score = -float("inf")
+    for cx, cy, radius, shape_score in candidates:
+        cv2.circle(candidate_mask, (int(round(cx)), int(round(cy))), int(round(radius)), 255, 1)
+        score = _score_rough_candidate(
+            image_bgr,
+            luminance_for_dark,
+            skin_mask,
+            highlight_mask,
+            (cx, cy),
+            radius,
+            shape_score,
+        )
+        if score > best_score:
+            best_score = score
+            best = (cx, cy, radius, shape_score, score)
+
+    if best is None or best_score < 0.65:
+        return None
+
+    cx, cy, iris_radius, _, score = best
+    mask, inner_r, outer_r, sample_count = _build_rough_iris_ring(
+        image_bgr.shape,
+        (cx, cy),
+        iris_radius,
+        inner_iris_ratio,
+        outer_iris_ratio,
+    )
+    confidence = float(np.clip((score - 0.35) / 3.2, 0.25, 0.92))
+    exclusion_mask = np.zeros_like(luminance, dtype=np.uint8)
+    exclusion_mask[skin_mask] = 180
+    exclusion_mask[highlight_mask > 0] = 255
+    return RoughIrisEstimate(
+        center_x=int(round(cx)),
+        center_y=int(round(cy)),
+        iris_radius=float(iris_radius),
+        inner_radius=inner_r,
+        outer_radius=outer_r,
+        confidence=confidence,
+        method="rough_closeup",
+        sample_pixel_count=sample_count,
+        candidate_count=len(candidates),
+        candidate_mask=candidate_mask,
+        highlight_mask=highlight_mask,
+        exclusion_mask=exclusion_mask,
+    )
 
 
 def _detect_pupil_hough(gray: np.ndarray, min_dim: int) -> Optional[PupilEstimate]:

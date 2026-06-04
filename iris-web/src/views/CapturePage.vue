@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { analyzeIris, analyzeIrisManual, type AnalysisResult, type DetectionInfo } from '../api/iris'
+import {
+  analyzeIris,
+  analyzeIrisManual,
+  type AnalysisResult,
+  type DetectionInfo,
+  type DetectionMode,
+} from '../api/iris'
 
 const videoRef = ref<HTMLVideoElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -19,6 +25,7 @@ const manualMode = ref(false)
 const manualParams = ref<DetectionInfo | null>(null)
 const adjustCursor = ref('default')
 const skipQuality = ref(false)
+const detectionMode = ref<DetectionMode>('auto')
 
 let mediaStream: MediaStream | null = null
 let adjustImage: HTMLImageElement | null = null
@@ -32,6 +39,23 @@ const gradeLabels: Record<number, string> = {
   3: '中等',
   4: '较深',
   5: '最深',
+}
+
+const detectionModeOptions: Array<{ value: DetectionMode; label: string; tip: string }> = [
+  { value: 'auto', label: '自动识别', tip: '综合清晰、实拍与 MediaPipe 候选' },
+  { value: 'eye_closeup', label: '清晰特写', tip: '适合瞳孔/虹膜边界清楚的图片' },
+  { value: 'rough_closeup', label: '实拍粗略', tip: '优先定位深色虹膜整体圆盘' },
+]
+
+const detectionModeLabels: Record<DetectionMode, string> = {
+  auto: '自动识别',
+  eye_closeup: '清晰特写',
+  rough_closeup: '实拍粗略',
+  face: '全脸定位',
+}
+
+function detectionLabel(method?: string) {
+  return detectionModeLabels[method as DetectionMode] ?? method ?? '-'
 }
 
 async function startCamera() {
@@ -113,7 +137,7 @@ async function uploadFile(file: File) {
   adjustImage = null
 
   try {
-    const data = await analyzeIris(file, skipQuality.value)
+    const data = await analyzeIris(file, skipQuality.value, detectionMode.value)
     if (data.success === false) {
       errorMsg.value = data.error || '分析失败'
     } else {
@@ -354,7 +378,12 @@ async function analyzeWithManualParams() {
   manualLoading.value = true
   errorMsg.value = ''
   try {
-    const data = await analyzeIrisManual(currentFile.value, manualParams.value, skipQuality.value)
+    const data = await analyzeIrisManual(
+      currentFile.value,
+      manualParams.value,
+      skipQuality.value,
+      detectionMode.value,
+    )
     if (data.success === false) {
       errorMsg.value = data.error || '人工调整分析失败'
     } else {
@@ -438,6 +467,22 @@ onBeforeUnmount(() => {
             <p>请开启摄像头或上传眼部图片</p>
           </div>
           <canvas ref="canvasRef" class="hidden-canvas" />
+        </div>
+
+        <div class="mode-selector">
+          <div class="mode-selector-heading">
+            <strong>识别模式</strong>
+            <span>{{ detectionModeOptions.find((item) => item.value === detectionMode)?.tip }}</span>
+          </div>
+          <el-radio-group v-model="detectionMode" size="large">
+            <el-radio-button
+              v-for="option in detectionModeOptions"
+              :key="option.value"
+              :label="option.value"
+            >
+              {{ option.label }}
+            </el-radio-button>
+          </el-radio-group>
         </div>
 
         <div class="actions">
@@ -589,6 +634,9 @@ onBeforeUnmount(() => {
             <el-descriptions-item label="颜色依据">
               {{ result.iris_color?.reason ?? '-' }}
             </el-descriptions-item>
+            <el-descriptions-item label="定位模式">
+              {{ detectionLabel(result.detection_method) }}
+            </el-descriptions-item>
           </el-descriptions>
 
           <div v-if="result.debug_images" class="evidence-section">
@@ -599,6 +647,8 @@ onBeforeUnmount(() => {
             <div class="evidence-grid">
               <div
                 v-for="item in [
+                  ['00_candidate_regions', '候选与排除'],
+                  ['01_pupil_candidates', '暗区候选'],
                   ['01_pupil_localization', '瞳孔定位'],
                   ['02_iris_ring', '虹膜环带'],
                   ['04_valid_samples', '最终取色像素'],
@@ -811,6 +861,30 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   margin-top: 18px;
+}
+
+.mode-selector {
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid #dbe9f1;
+  border-radius: 16px;
+  background: #f8fbfd;
+}
+
+.mode-selector-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: #5f7083;
+  font-size: 13px;
+}
+
+.mode-selector-heading strong {
+  color: #1b3348;
+  font-size: 15px;
 }
 
 .quality-toggle {

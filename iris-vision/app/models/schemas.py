@@ -56,7 +56,7 @@ class AnalysisResponse(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0, description="分档置信度")
     detection_method: str = Field(
         "eye_closeup",
-        description="虹膜定位方式：eye_closeup 或 face_landmark",
+        description="虹膜定位方式：eye_closeup、rough_closeup、face_landmark 或 manual_adjustment",
     )
     message: str = "provisional thresholds, calibration required"
 

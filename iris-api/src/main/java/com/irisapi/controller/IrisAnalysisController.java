@@ -45,27 +45,33 @@ public class IrisAnalysisController {
     @PostMapping(value = "/iris/analyze", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> analyze(
             @RequestParam("file") MultipartFile file,
-            @RequestParam(name = "skip_quality", defaultValue = "false") boolean skipQuality) {
-        return analyzeInternal(file, null, skipQuality);
+            @RequestParam(name = "skip_quality", defaultValue = "false") boolean skipQuality,
+            @RequestParam(name = "detection_mode", defaultValue = "auto") String detectionMode) {
+        return analyzeInternal(file, null, skipQuality, detectionMode);
     }
 
     @PostMapping(value = "/iris/analyze/manual", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> analyzeManual(
             @RequestParam("file") MultipartFile file,
             @RequestParam("manual_params") String manualParams,
-            @RequestParam(name = "skip_quality", defaultValue = "false") boolean skipQuality) {
-        return analyzeInternal(file, manualParams, skipQuality);
+            @RequestParam(name = "skip_quality", defaultValue = "false") boolean skipQuality,
+            @RequestParam(name = "detection_mode", defaultValue = "auto") String detectionMode) {
+        return analyzeInternal(file, manualParams, skipQuality, detectionMode);
     }
 
-    private ResponseEntity<String> analyzeInternal(MultipartFile file, String manualParams, boolean skipQuality) {
+    private ResponseEntity<String> analyzeInternal(
+            MultipartFile file,
+            String manualParams,
+            boolean skipQuality,
+            String detectionMode) {
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().body("{\"success\":false,\"error\":\"empty_file\"}");
         }
 
         try {
             String response = manualParams == null
-                    ? visionClientService.analyze(file, skipQuality)
-                    : visionClientService.analyzeManual(file, manualParams, skipQuality);
+                    ? visionClientService.analyze(file, skipQuality, detectionMode)
+                    : visionClientService.analyzeManual(file, manualParams, skipQuality, detectionMode);
             return ResponseEntity.ok(response);
         } catch (HttpClientErrorException | HttpServerErrorException ex) {
             return ResponseEntity.status(ex.getStatusCode())

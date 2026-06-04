@@ -89,6 +89,35 @@ def draw_pupil_candidates(
     return out
 
 
+def draw_candidate_regions(
+    image_bgr: np.ndarray,
+    detection: IrisDetectionResult,
+) -> np.ndarray:
+    """
+    图 0：粗略定位候选与排除区域。
+    - 黄线：候选圆
+    - 红色：反光/皮肤等排除区域
+    """
+    out = image_bgr.copy()
+    overlay = out.copy()
+    if detection.candidate_mask is not None:
+        candidate = detection.candidate_mask > 0
+        overlay[candidate] = (overlay[candidate] * 0.35 + np.array([0, 255, 255]) * 0.65).astype(np.uint8)
+    if detection.highlight_mask is not None:
+        highlight = detection.highlight_mask > 0
+        overlay[highlight] = (overlay[highlight] * 0.25 + np.array([0, 0, 255]) * 0.75).astype(np.uint8)
+    if detection.exclusion_mask is not None:
+        excluded = detection.exclusion_mask > 0
+        overlay[excluded] = (overlay[excluded] * 0.45 + np.array([0, 80, 255]) * 0.55).astype(np.uint8)
+    out = cv2.addWeighted(overlay, 0.65, out, 0.35, 0)
+    label = f"candidates={detection.candidate_count or 0} method={detection.method}"
+    if detection.selection_score is not None:
+        label += f" score={detection.selection_score:.2f}"
+    cv2.putText(out, label, (12, 28),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 2, cv2.LINE_AA)
+    return out
+
+
 def draw_iris_ring(
     image_bgr: np.ndarray,
     detection: IrisDetectionResult,
@@ -170,6 +199,7 @@ def build_debug_images(
 ) -> Dict[str, np.ndarray]:
     """生成全部调试叠加图。"""
     return {
+        "00_candidate_regions": draw_candidate_regions(image_bgr, pipeline.detection),
         "01_pupil_candidates": draw_pupil_candidates(image_bgr, pipeline.detection),
         "01_pupil_localization": draw_pupil_localization(
             image_bgr,
@@ -213,6 +243,7 @@ def build_debug_metrics(pipeline: AnalysisPipelineResult, highlight_v: int) -> d
         "pupil_confidence": det.pupil_confidence,
         "iris_confidence": det.iris_confidence,
         "candidate_count": det.candidate_count,
+        "selection_score": det.selection_score,
         "blur_score": round(pipeline.quality.blur_score, 2),
         "overexposed_ratio": round(pipeline.quality.overexposed_ratio, 4),
         "lab": {

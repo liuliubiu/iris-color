@@ -30,6 +30,8 @@ export interface DetectionInfo {
   method: string
 }
 
+export type DetectionMode = 'auto' | 'eye_closeup' | 'rough_closeup' | 'face'
+
 export interface AnalysisResult {
   success: boolean
   quality?: QualityInfo
@@ -50,13 +52,17 @@ const api = axios.create({
   timeout: 60000,
 })
 
-export async function analyzeIris(file: File, skipQuality = false): Promise<AnalysisResult> {
+export async function analyzeIris(
+  file: File,
+  skipQuality = false,
+  detectionMode: DetectionMode = 'auto',
+): Promise<AnalysisResult> {
   const formData = new FormData()
   formData.append('file', file)
 
   const response = await api.post<AnalysisResult>('/iris/analyze', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    params: { skip_quality: skipQuality },
+    params: { skip_quality: skipQuality, detection_mode: detectionMode },
   })
   return response.data
 }
@@ -65,6 +71,7 @@ export async function analyzeIrisManual(
   file: File,
   manualParams: DetectionInfo,
   skipQuality = false,
+  detectionMode: DetectionMode = 'auto',
 ): Promise<AnalysisResult> {
   const formData = new FormData()
   formData.append('file', file)
@@ -78,7 +85,7 @@ export async function analyzeIrisManual(
 
   const response = await api.post<AnalysisResult>('/iris/analyze/manual', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    params: { skip_quality: skipQuality },
+    params: { skip_quality: skipQuality, detection_mode: detectionMode },
   })
   return response.data
 }

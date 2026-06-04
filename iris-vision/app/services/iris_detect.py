@@ -6,7 +6,7 @@ from typing import Mapping, Optional, Tuple
 import cv2
 import numpy as np
 
-from app.services.eye_iris_detect import build_refined_iris_ring, detect_pupil
+from app.services.eye_iris_detect import build_refined_iris_ring, detect_pupil, detect_rough_iris_disk
 from app.services.face_landmarker import detect_face_landmarks
 
 _LEFT_IRIS_CENTER = 468
@@ -33,6 +33,9 @@ class IrisDetectionResult:
     iris_outer_method: Optional[str] = None
     candidate_count: Optional[int] = None
     candidate_mask: Optional[np.ndarray] = None
+    highlight_mask: Optional[np.ndarray] = None
+    exclusion_mask: Optional[np.ndarray] = None
+    selection_score: Optional[float] = None
 
 
 def build_manual_iris_detection(
@@ -130,7 +133,10 @@ def _detect_from_face_landmarks(
     """全脸模式：MediaPipe Face Landmarker + 虹膜 landmark。"""
     h, w = image_bgr.shape[:2]
     rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    landmarks = detect_face_landmarks(rgb)
+    try:
+        landmarks = detect_face_landmarks(rgb)
+    except (FileNotFoundError, RuntimeError, ValueError):
+        return None
     if landmarks is None:
         return None
 
@@ -171,6 +177,63 @@ def _detect_from_face_landmarks(
             candidate_count=0,
         )
     return None
+
+
+def _detect_from_rough_closeup(
+    image_bgr: np.ndarray,
+    rough_cfg: dict,
+) -> Optional[IrisDetectionResult]:
+    """
+    实拍粗略模式：将瞳孔+深色虹膜作为整体圆盘定位。
+    适合低对比、反光较多、普通手机拍摄的单眼图。
+    """
+    rough = detect_rough_iris_disk(
+        image_bgr,
+        center_roi_ratio=rough_cfg.get("center_roi_ratio", 0.92),
+        dark_percentile=rough_cfg.get("dark_percentile", 32.0),
+        min_radius_ratio=rough_cfg.get("min_radius_ratio", 0.045),
+        max_radius_ratio=rough_cfg.get("max_radius_ratio", 0.32),
+        inner_iris_ratio=rough_cfg.get("inner_iris_ratio", 0.24),
+        outer_iris_ratio=rough_cfg.get("outer_iris_ratio", 0.86),
+        highlight_v_threshold=rough_cfg.get("highlight_v_threshold", 235),
+    )
+    if rough is None:
+        return None
+
+    center = (rough.center_x, rough.center_y)
+    return IrisDetectionResult(
+        mask=_ring_mask_from_rough(image_bgr.shape, center, rough.inner_radius, rough.outer_radius),
+        center=center,
+        radius=rough.outer_radius,
+        eye_side="closeup",
+        sample_pixel_count=rough.sample_pixel_count,
+        method="rough_closeup",
+        pupil_center=center,
+        pupil_radius=rough.inner_radius,
+        inner_radius=rough.inner_radius,
+        outer_radius=rough.outer_radius,
+        pupil_confidence=rough.confidence,
+        iris_confidence=rough.confidence,
+        pupil_method="rough_dark_disk",
+        iris_outer_method="rough_dark_disk",
+        candidate_count=rough.candidate_count,
+        candidate_mask=rough.candidate_mask,
+        highlight_mask=rough.highlight_mask,
+        exclusion_mask=rough.exclusion_mask,
+    )
+
+
+def _ring_mask_from_rough(
+    image_shape: Tuple[int, int],
+    center: Tuple[int, int],
+    inner_radius: float,
+    outer_radius: float,
+) -> np.ndarray:
+    h, w = image_shape[:2]
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.circle(mask, center, int(round(max(outer_radius, 1))), 255, -1)
+    cv2.circle(mask, center, int(round(max(inner_radius, 1))), 0, -1)
+    return mask
 
 
 def _detect_from_eye_closeup(
@@ -217,30 +280,92 @@ def _detect_from_eye_closeup(
     )
 
 
+def _score_detection_candidate(image_bgr: np.ndarray, detection: IrisDetectionResult) -> float:
+    """给 auto 模式候选打分，避免第一条成功但明显偏差时直接返回。"""
+    h, w = image_bgr.shape[:2]
+    min_dim = min(h, w)
+    cx, cy = detection.center
+    center_dist = (((cx - w / 2) ** 2 + (cy - h / 2) ** 2) ** 0.5) / max(min_dim, 1)
+    confidence_values = [
+        value for value in (detection.pupil_confidence, detection.iris_confidence) if value is not None
+    ]
+    confidence = float(np.mean(confidence_values)) if confidence_values else 0.35
+
+    ring = detection.mask > 0
+    ring_count = int(np.count_nonzero(ring))
+    if ring_count <= 0:
+        return -float("inf")
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    saturation = hsv[:, :, 1]
+    value = hsv[:, :, 2]
+    rejected_ratio = float(np.mean((value[ring] >= 235) | (value[ring] <= 8)))
+    sclera_leak = float(np.mean((value[ring] >= 170) & (saturation[ring] <= 70)))
+    radius = float(detection.outer_radius or detection.radius or 0)
+    radius_score = 1.0 - min(abs(radius - min_dim * 0.14) / max(min_dim * 0.16, 1.0), 1.0)
+    sample_score = min(ring_count / max(min_dim * min_dim * 0.018, 1.0), 1.0)
+    method_bonus = {
+        "eye_closeup": 0.12,
+        "rough_closeup": 0.18,
+        "face_landmark": 0.06,
+    }.get(detection.method, 0.0)
+
+    score = (
+        confidence * 1.55
+        + sample_score * 0.55
+        + radius_score * 0.35
+        + method_bonus
+        - center_dist * 0.55
+        - rejected_ratio * 0.85
+        - sclera_leak * 0.55
+    )
+    detection.selection_score = float(score)
+    return float(score)
+
+
+def _detect_auto(
+    image_bgr: np.ndarray,
+    inner_ratio: float,
+    outer_ratio: float,
+    eye_closeup_cfg: dict,
+    rough_closeup_cfg: dict,
+) -> Optional[IrisDetectionResult]:
+    candidates = [
+        _detect_from_eye_closeup(image_bgr, eye_closeup_cfg),
+        _detect_from_rough_closeup(image_bgr, rough_closeup_cfg),
+        _detect_from_face_landmarks(image_bgr, inner_ratio, outer_ratio),
+    ]
+    valid = [candidate for candidate in candidates if candidate is not None]
+    if not valid:
+        return None
+    return max(valid, key=lambda item: _score_detection_candidate(image_bgr, item))
+
+
 def detect_iris_ring_mask(
     image_bgr: np.ndarray,
     mode: str = "eye_closeup",
     inner_ratio: float = 0.30,
     outer_ratio: float = 0.80,
     eye_closeup_cfg: Optional[dict] = None,
+    rough_closeup_cfg: Optional[dict] = None,
 ) -> Optional[IrisDetectionResult]:
     """
     检测虹膜环带 mask。
 
     mode:
       - eye_closeup: 默认，适用于「眼睛占满画面」的拍照/上传图
+      - rough_closeup: 实拍粗略模式，适用于低对比深色虹膜
       - face: 全脸图，MediaPipe 定位
-      - auto: 先 eye_closeup，失败再 face
+      - auto: 多候选评分选择
     """
     eye_cfg = eye_closeup_cfg or {}
+    rough_cfg = rough_closeup_cfg or {}
 
     if mode == "eye_closeup":
         return _detect_from_eye_closeup(image_bgr, eye_cfg)
+    if mode == "rough_closeup":
+        return _detect_from_rough_closeup(image_bgr, rough_cfg)
     if mode == "face":
         return _detect_from_face_landmarks(image_bgr, inner_ratio, outer_ratio)
 
     # auto
-    result = _detect_from_eye_closeup(image_bgr, eye_cfg)
-    if result is not None:
-        return result
-    return _detect_from_face_landmarks(image_bgr, inner_ratio, outer_ratio)
+    return _detect_auto(image_bgr, inner_ratio, outer_ratio, eye_cfg, rough_cfg)

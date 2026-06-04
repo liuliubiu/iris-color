@@ -53,34 +53,40 @@ def run_analysis(
     *,
     skip_quality: bool = False,
     manual_detection: Optional[dict] = None,
+    detection_mode: Optional[str] = None,
 ) -> AnalysisPipelineResult:
     """执行质量检测 → 定位 → 取色 → 分档。"""
     quality_cfg = config.get("quality", {})
     ring_cfg = config.get("iris_ring", {})
     detection_cfg = config.get("detection", {})
     eye_closeup_cfg = config.get("eye_closeup", {})
+    rough_closeup_cfg = config.get("rough_closeup", {})
     highlight_v = config.get("highlight_v_threshold", 240)
-    detection_mode = detection_cfg.get("mode", "eye_closeup")
+    requested_mode = detection_mode or detection_cfg.get("mode", "auto")
+    allowed_modes = {"auto", "eye_closeup", "rough_closeup", "face"}
+    if requested_mode not in allowed_modes:
+        requested_mode = detection_cfg.get("mode", "auto")
 
     quality = check_quality(
         image_bgr,
         blur_threshold=quality_cfg.get("blur_threshold", 15.0),
         overexposed_ratio_max=quality_cfg.get("overexposed_ratio_max", 0.15),
-        detection_mode=detection_mode,
+        detection_mode=requested_mode,
     )
     if not skip_quality and not quality.passed:
         raise AnalysisError("quality_check_failed", quality)
 
     if manual_detection is not None:
         detection = build_manual_iris_detection(image_bgr.shape, manual_detection)
-        detection_mode = "manual_adjustment"
+        requested_mode = "manual_adjustment"
     else:
         detection = detect_iris_ring_mask(
             image_bgr,
-            mode=detection_mode,
+            mode=requested_mode,
             inner_ratio=ring_cfg.get("inner_ratio", 0.30),
             outer_ratio=ring_cfg.get("outer_ratio", 0.80),
             eye_closeup_cfg=eye_closeup_cfg,
+            rough_closeup_cfg=rough_closeup_cfg,
         )
     if detection is None:
         raise AnalysisError("no_iris_detected", quality)
@@ -104,5 +110,5 @@ def run_analysis(
         lab=lab,
         grade=grade,
         iris_color=iris_color,
-        detection_mode=detection_mode,
+        detection_mode=requested_mode,
     )

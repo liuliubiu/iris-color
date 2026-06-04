@@ -1,9 +1,9 @@
 # L* 分档边界（上界，不含该值则进入更深档）
 boundaries: [30, 21, 19, 13]  
 
-# 定位模式: eye_closeup（默认，眼部特写）| face（全脸）| auto（先特写后全脸）
+# 定位模式: auto（默认，多候选）| eye_closeup（清晰眼部特写）| rough_closeup（实拍粗略）| face（全脸）
 detection:
-  mode: eye_closeup
+  mode: auto
 
 
 # 眼部特写：瞳孔 → 虹膜环带（相对瞳孔半径的倍数）
@@ -14,6 +14,16 @@ eye_closeup:
   outer_pupil_multiplier: 2.8
   inner_iris_ratio: 0.35
   outer_iris_ratio: 0.85
+
+# 手机实拍/低对比模式：定位瞳孔+深色虹膜整体圆盘，再取中段环带
+rough_closeup:
+  center_roi_ratio: 0.92
+  dark_percentile: 32.0
+  min_radius_ratio: 0.045
+  max_radius_ratio: 0.32
+  inner_iris_ratio: 0.24
+  outer_iris_ratio: 0.86
+  highlight_v_threshold: 235
 
 # 全脸模式环带比例（相对 iris landmark 半径，仅 mode=face/auto 时使用）
 iris_ring:
