@@ -97,6 +97,12 @@ async function uploadBlob(blob: Blob, filename: string) {
   await uploadFile(file)
 }
 
+async function reanalyze() {
+  const file = currentFile.value
+  if (!file) return
+  await uploadFile(file)
+}
+
 async function uploadFile(file: File) {
   loading.value = true
   result.value = null
@@ -446,8 +452,20 @@ onBeforeUnmount(() => {
             class="hidden-input"
             @change="onFileSelected"
           />
+          <el-button
+            v-if="currentFile && previewUrl"
+            size="large"
+            :loading="loading"
+            @click="reanalyze"
+          >
+            重新识别
+          </el-button>
           <el-button v-if="previewUrl" size="large" @click="clearPreview">清除预览</el-button>
-          <el-button v-if="result?.detection && previewUrl" size="large" @click="startManualAdjust">
+          <el-button
+            size="large"
+            :disabled="!previewUrl || !manualParams"
+            @click="startManualAdjust"
+          >
             人工校准区域
           </el-button>
           <el-checkbox v-model="skipQuality" class="quality-toggle">
