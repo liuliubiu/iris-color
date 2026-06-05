@@ -15,6 +15,20 @@ eye_closeup:
   inner_iris_ratio: 0.35
   outer_iris_ratio: 0.85
 
+  # 性能：定位统一降采样到此最短边（<=此值的图不缩放，结果会缩放回全分辨率）
+  detect_target_min_dim: 900
+  # 性能：CIELAB 取色的有效像素上限，超过则固定种子随机抽样（中位数稳健）；0=不限
+  color_sample_cap: 20000
+
+  # 眼部先验（MediaPipe FaceLandmarker）：仅用于「抢救」疑似眉毛误检的全帧结果。
+  # 全帧结果是黑盘且左右两侧白色巩膜占比都低于 eyebrow_suspect_sclera_min 时，
+  # 用先验裁 ROI 重定位；抢救结果须自身双侧有更多巩膜才替换。模型缺失/无脸自动回退。
+  use_landmark_prior: true
+  landmark_roi_margin: 3.0
+  eyebrow_suspect_sclera_min: 0.06
+  # 全帧中心偏离先验虹膜中心超过此倍数虹膜半径时，判定疑似锁在眉毛/睫毛上并触发 ROI 抢救
+  prior_disagree_factor: 1.0
+
   # 自动切换：精定位瞳孔置信度低于此值时回退黑盘直检
   auto_precise_min_confidence: 0.5
   # 深色融合眼无法分出瞳孔时，按虹膜半径比例估算瞳孔
@@ -27,6 +41,7 @@ eye_closeup:
     sat_threshold: 90     # 且饱和度低于此值才算镜面反光
     max_area_ratio: 0.04  # 单个亮斑面积占比上限，超过视为巩膜/皮肤不修复
     dilate_px: 3
+    skip_rays: false      # 径向剖面是否跳过反光像素；默认关闭（会扰动清晰小图、对实测反光图无增益）
 
   # 黑盘直检（实拍粗略模式核心）
   disk:
@@ -39,6 +54,8 @@ eye_closeup:
     sclera_min: 0.10            # 偏白巩膜占比（仅作加分项，不再硬门槛）
     sclera_v_min: 150.0         # 巩膜判定：亮度高于此值
     sclera_s_max: 60.0          # 巩膜判定：饱和度低于此值
+    sclera_bilateral_min: 0.0   # 双侧巩膜硬门槛（左右各须达标）；0=关闭，仅作加分以免误杀深色融合眼
+    target_min_dim: 700         # 黑盘直检内部 Hough 的工作分辨率
     inner_iris_ratio: 0.40      # 环带内缘（扣掉瞳孔）
     outer_iris_ratio: 0.85      # 环带外缘（留在虹膜中段）
 

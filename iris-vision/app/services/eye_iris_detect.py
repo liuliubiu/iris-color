@@ -242,6 +242,18 @@ def _sample_luminance_at(image: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.
     return image[y_clipped, x_clipped].astype(np.float32)
 
 
+def _ray_spec_fraction(
+    spec_mask: Optional[np.ndarray], xs: np.ndarray, ys: np.ndarray
+) -> float:
+    """一条射线上落在镜面反光区域的采样点占比（用于跳过被反光污染的射线）。"""
+    if spec_mask is None:
+        return 0.0
+    h, w = spec_mask.shape[:2]
+    xi = np.clip(np.rint(xs).astype(np.int32), 0, w - 1)
+    yi = np.clip(np.rint(ys).astype(np.int32), 0, h - 1)
+    return float(np.mean(spec_mask[yi, xi] > 0))
+
+
 def _smooth_profile(values: np.ndarray, window: int = 7) -> np.ndarray:
     """平滑一维径向亮度，避免卷积边缘产生假梯度。"""
     if len(values) < window:
@@ -252,7 +264,11 @@ def _smooth_profile(values: np.ndarray, window: int = 7) -> np.ndarray:
     return np.convolve(padded, kernel, mode="valid")
 
 
-def _refine_pupil_boundary(luminance: np.ndarray, pupil: PupilEstimate) -> PupilEstimate:
+def _refine_pupil_boundary(
+    luminance: np.ndarray,
+    pupil: PupilEstimate,
+    spec_mask: Optional[np.ndarray] = None,
+) -> PupilEstimate:
     """沿射线寻找瞳孔黑区到虹膜的亮度上升边界。"""
     h, w = luminance.shape[:2]
     min_dim = min(h, w)
@@ -269,6 +285,9 @@ def _refine_pupil_boundary(luminance: np.ndarray, pupil: PupilEstimate) -> Pupil
     for angle in angles:
         xs = cx + np.cos(angle) * radial_samples
         ys = cy + np.sin(angle) * radial_samples
+        # 反光会在瞳孔亮环处制造假的亮度跃升，污染严重的射线直接跳过
+        if _ray_spec_fraction(spec_mask, xs, ys) > 0.3:
+            continue
         values = _sample_luminance_at(luminance, xs, ys)
         gradients = np.diff(values)
         if len(gradients) == 0:
@@ -310,6 +329,7 @@ def _estimate_iris_outer_radius(
     luminance: np.ndarray,
     pupil: PupilEstimate,
     outer_pupil_multiplier: float,
+    spec_mask: Optional[np.ndarray] = None,
 ) -> Tuple[float, str, float]:
     """沿多条射线寻找虹膜到巩膜/皮肤的外缘。"""
     h, w = luminance.shape[:2]
@@ -330,6 +350,8 @@ def _estimate_iris_outer_radius(
     for angle in angles:
         xs = cx + np.cos(angle) * radial_samples
         ys = cy + np.sin(angle) * radial_samples
+        if _ray_spec_fraction(spec_mask, xs, ys) > 0.3:
+            continue
         values = _sample_luminance_at(luminance, xs, ys)
         smooth = _smooth_profile(values, 7)
         gradients = np.diff(smooth)
@@ -365,6 +387,7 @@ def detect_pupil(
     image_bgr: np.ndarray,
     center_roi_ratio: float = 0.85,
     dark_percentile: float = 12.0,
+    spec_mask: Optional[np.ndarray] = None,
 ) -> Optional[PupilEstimate]:
     """综合瞳孔检测：严格暗区候选优先，失败则用 Hough 圆。"""
     luminance = _preprocess_luminance(image_bgr)
@@ -372,7 +395,7 @@ def detect_pupil(
 
     pupil = _detect_pupil_candidates(luminance, center_roi_ratio, dark_percentile)
     if pupil is not None and pupil.radius > 0:
-        return _refine_pupil_boundary(luminance, pupil)
+        return _refine_pupil_boundary(luminance, pupil, spec_mask)
 
     fallback = _detect_pupil_hough(luminance, min_dim)
     if fallback is not None and pupil is not None:
@@ -416,6 +439,7 @@ def build_refined_iris_ring(
     outer_pupil_multiplier: float,
     inner_iris_ratio: float = 0.35,
     outer_iris_ratio: float = 0.85,
+    spec_mask: Optional[np.ndarray] = None,
 ) -> IrisRingEstimate:
     """
     使用独立估计的虹膜外缘生成取色环带。
@@ -429,6 +453,7 @@ def build_refined_iris_ring(
         luminance,
         pupil,
         outer_pupil_multiplier,
+        spec_mask,
     )
     iris_outer_r = float(np.clip(iris_outer_r, pupil.radius * 1.8, min_dim * 0.48))
 
@@ -570,6 +595,35 @@ def _sclera_fraction(
     return float(np.mean(whitish))
 
 
+def _bilateral_sclera_fraction(
+    hsv: np.ndarray,
+    cx: float,
+    cy: float,
+    radius: float,
+    v_min: float,
+    s_max: float,
+) -> float:
+    """
+    左右两侧楔形各自的「偏白巩膜」占比，取较小值。
+
+    真实虹膜被巩膜水平包围，左右两侧都应有白色；眉毛/睫毛被皮肤包围，
+    两侧都没有白巩膜。取双侧最小值可拒绝「单侧偶然有亮皮肤」的假阳性。
+    """
+    out_r = radius * 1.15
+
+    def _wedge(center_deg: float) -> float:
+        angles = np.deg2rad(np.linspace(center_deg - 35.0, center_deg + 35.0, 13))
+        xs = cx + np.cos(angles) * out_r
+        ys = cy + np.sin(angles) * out_r
+        s_vals = _sample_luminance_at(hsv[:, :, 1], xs, ys)
+        v_vals = _sample_luminance_at(hsv[:, :, 2], xs, ys)
+        return float(np.mean((v_vals > v_min) & (s_vals < s_max)))
+
+    right = _wedge(0.0)
+    left = _wedge(180.0)
+    return min(left, right)
+
+
 def detect_iris_disk(
     image_bgr: np.ndarray,
     dark_percentile: float = 35.0,
@@ -582,6 +636,8 @@ def detect_iris_disk(
     sclera_min: float = 0.10,
     sclera_v_min: float = 150.0,
     sclera_s_max: float = 60.0,
+    sclera_bilateral_min: float = 0.0,
+    target_min_dim: int = 700,
 ) -> Optional[IrisDiskEstimate]:
     """
     黑盘直检：直接用 Hough 找虹膜/巩膜的圆形边界，再用「内暗外亮」验证。
@@ -593,7 +649,7 @@ def detect_iris_disk(
     min_dim = min(h, w)
 
     # 大图先降采样，兼顾 Hough 速度与稳定性
-    target = 700
+    target = target_min_dim
     scale = target / min_dim if min_dim > target else 1.0
     small = (
         cv2.resize(image_bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
@@ -610,6 +666,7 @@ def detect_iris_disk(
     blurred = cv2.medianBlur(luminance, 5)
 
     # 多阈值收集候选并去重：严阈值给强边界，松阈值补遮挡/弱边界
+    # 强阈值（param2=30）一旦给出足够候选就提前短路，省掉松阈值扫描
     candidates: dict = {}
     for param2 in (30, 22, 16):
         circles = cv2.HoughCircles(
@@ -622,12 +679,13 @@ def detect_iris_disk(
             minRadius=min_r,
             maxRadius=max_r,
         )
-        if circles is None:
-            continue
-        for circle in circles[0]:
-            cx, cy, radius = float(circle[0]), float(circle[1]), float(circle[2])
-            key = (round(cx / 12), round(cy / 12), round(radius / 12))
-            candidates.setdefault(key, (cx, cy, radius))
+        if circles is not None:
+            for circle in circles[0]:
+                cx, cy, radius = float(circle[0]), float(circle[1]), float(circle[2])
+                key = (round(cx / 12), round(cy / 12), round(radius / 12))
+                candidates.setdefault(key, (cx, cy, radius))
+        if len(candidates) >= 2:
+            break
     if not candidates:
         return None
 
@@ -644,6 +702,10 @@ def detect_iris_disk(
             continue
         # 偏白巩膜占比作为加分项（不作硬门槛，避免暗光巩膜被误杀）
         sclera = _sclera_fraction(hsv, cx, cy, radius, sclera_v_min, sclera_s_max)
+        # 双侧巩膜合理性：眉毛/睫毛两侧都被皮肤包围、无白巩膜，可据此拒绝
+        bilateral = _bilateral_sclera_fraction(hsv, cx, cy, radius, sclera_v_min, sclera_s_max)
+        if sclera_bilateral_min > 0.0 and bilateral < sclera_bilateral_min:
+            continue
 
         darkness = 1.0 - min(inside / 255.0, 1.0)
         dist_norm = ((cx - img_cx) ** 2 + (cy - img_cy) ** 2) ** 0.5 / max(sw, sh)
@@ -652,6 +714,7 @@ def detect_iris_disk(
             + support * 1.2
             + darkness * 0.8
             + sclera * 0.8
+            + bilateral * 0.8
             - dist_norm * 0.5
         )
         if score > best_score:

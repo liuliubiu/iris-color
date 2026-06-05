@@ -74,13 +74,24 @@ def extract_iris_lab_median(
     image_bgr: np.ndarray,
     mask: np.ndarray,
     highlight_v_threshold: int = 240,
+    sample_cap: int = 0,
 ) -> LabResult:
-    """在 mask 区域内取色，剔除高光，返回 CIELAB 中位数。"""
+    """在 mask 区域内取色，剔除高光，返回 CIELAB 中位数。
+
+    sample_cap > 0 且有效像素超过该上限时，固定随机种子抽样后再做 CIELAB 转换：
+    中位数对抽样稳健，大图可省去十几万像素的 colorspacious 转换，显著提速。
+    """
     masks = compute_sampling_masks(image_bgr, mask, highlight_v_threshold)
     pixels_bgr = image_bgr[masks.valid]
 
-    if len(pixels_bgr) == 0:
+    total = len(pixels_bgr)
+    if total == 0:
         raise ValueError("no_valid_pixels_after_highlight_removal")
+
+    if sample_cap and total > sample_cap:
+        rng = np.random.default_rng(12345)
+        idx = rng.choice(total, size=sample_cap, replace=False)
+        pixels_bgr = pixels_bgr[idx]
 
     pixels_rgb = pixels_bgr[:, ::-1].astype(np.float64) / 255.0
     lab_array = colorspacious.cspace_convert(pixels_rgb, "sRGB1", "CIELab")
@@ -89,7 +100,7 @@ def extract_iris_lab_median(
         L=float(np.median(lab_array[:, 0])),
         a=float(np.median(lab_array[:, 1])),
         b=float(np.median(lab_array[:, 2])),
-        sample_pixel_count=int(len(pixels_bgr)),
+        sample_pixel_count=int(total),
     )
 
 

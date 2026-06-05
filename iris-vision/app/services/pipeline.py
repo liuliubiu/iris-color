@@ -95,7 +95,8 @@ def run_analysis(
     if int(sampling.valid.sum()) < min_pixels:
         raise AnalysisError("no_valid_pixels_after_highlight_removal", quality)
 
-    lab = extract_iris_lab_median(image_bgr, detection.mask, highlight_v)
+    color_sample_cap = int(eye_closeup_cfg.get("color_sample_cap", 20000))
+    lab = extract_iris_lab_median(image_bgr, detection.mask, highlight_v, sample_cap=color_sample_cap)
     grade = grade_from_l_star(lab.L, config_path)
     iris_color = classify_iris_color(lab, config)
 
