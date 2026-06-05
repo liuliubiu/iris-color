@@ -12,26 +12,44 @@ import {
 const videoRef = ref<HTMLVideoElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const adjustCanvasRef = ref<HTMLCanvasElement | null>(null)
+const cropCanvasRef = ref<HTMLCanvasElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const cameraActive = ref(false)
 const previewUrl = ref<string | null>(null)
+const originalPreviewUrl = ref<string | null>(null)
 const loading = ref(false)
 const manualLoading = ref(false)
 const result = ref<AnalysisResult | null>(null)
 const errorMsg = ref('')
 const currentFile = ref<File | null>(null)
+const originalFile = ref<File | null>(null)
 const manualMode = ref(false)
+const cropMode = ref(false)
 const manualParams = ref<DetectionInfo | null>(null)
 const adjustCursor = ref('default')
+const cropCursor = ref('crosshair')
 const skipQuality = ref(false)
 const detectMode = ref<DetectMode>('auto')
 
+interface CropRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+const cropRect = ref<CropRect>({ x: 0, y: 0, width: 0, height: 0 })
+
 let mediaStream: MediaStream | null = null
 let adjustImage: HTMLImageElement | null = null
+let cropImage: HTMLImageElement | null = null
 type DragMode = 'move' | 'pupil_radius' | 'inner_radius' | 'outer_radius'
+type CropDragMode = 'move' | 'nw' | 'ne' | 'sw' | 'se'
 let dragMode: DragMode | null = null
+let cropDragMode: CropDragMode | null = null
 let dragOffset = { x: 0, y: 0 }
+let cropDragStart = { x: 0, y: 0, rect: { x: 0, y: 0, width: 0, height: 0 } }
 
 const gradeLabels: Record<number, string> = {
   1: '最浅',
@@ -82,9 +100,8 @@ function capturePhoto() {
   ctx.drawImage(video, 0, 0)
   canvas.toBlob((blob) => {
     if (!blob) return
-    if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
-    previewUrl.value = URL.createObjectURL(blob)
-    uploadBlob(blob, 'capture.jpg')
+    const file = new File([blob], 'capture.jpg', { type: 'image/jpeg' })
+    enterCropMode(file)
   }, 'image/jpeg', 0.92)
 }
 
@@ -92,16 +109,231 @@ function onFileSelected(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
-
-  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
-  previewUrl.value = URL.createObjectURL(file)
-  uploadFile(file)
+  enterCropMode(file)
   input.value = ''
 }
 
-async function uploadBlob(blob: Blob, filename: string) {
-  const file = new File([blob], filename, { type: 'image/jpeg' })
-  await uploadFile(file)
+function enterCropMode(file: File) {
+  result.value = null
+  errorMsg.value = ''
+  manualMode.value = false
+  manualParams.value = null
+  adjustImage = null
+  currentFile.value = null
+  cropImage = null
+
+  revokePreviewUrls()
+  originalFile.value = file
+  originalPreviewUrl.value = URL.createObjectURL(file)
+  previewUrl.value = originalPreviewUrl.value
+  cropMode.value = true
+  nextTick(loadCropCanvas)
+}
+
+function revokePreviewUrls() {
+  if (originalPreviewUrl.value) {
+    URL.revokeObjectURL(originalPreviewUrl.value)
+    originalPreviewUrl.value = null
+  }
+  if (previewUrl.value) {
+    URL.revokeObjectURL(previewUrl.value)
+    previewUrl.value = null
+  }
+}
+
+function defaultCropRect(width: number, height: number): CropRect {
+  const size = Math.min(width, height) * 0.72
+  return {
+    x: (width - size) / 2,
+    y: (height - size) / 2,
+    width: size,
+    height: size,
+  }
+}
+
+function loadCropCanvas() {
+  const canvas = cropCanvasRef.value
+  const url = originalPreviewUrl.value
+  if (!canvas || !url) return
+  const image = new Image()
+  image.onload = () => {
+    cropImage = image
+    canvas.width = image.naturalWidth
+    canvas.height = image.naturalHeight
+    cropRect.value = defaultCropRect(canvas.width, canvas.height)
+    drawCropCanvas()
+  }
+  image.src = url
+}
+
+function normalizeCropRect() {
+  const canvas = cropCanvasRef.value
+  if (!canvas) return
+  const minSize = Math.max(80, Math.min(canvas.width, canvas.height) * 0.12)
+  let { x, y, width, height } = cropRect.value
+  width = Math.max(minSize, width)
+  height = Math.max(minSize, height)
+  x = Math.max(0, Math.min(x, canvas.width - minSize))
+  y = Math.max(0, Math.min(y, canvas.height - minSize))
+  if (x + width > canvas.width) x = canvas.width - width
+  if (y + height > canvas.height) y = canvas.height - height
+  cropRect.value = { x, y, width, height }
+}
+
+function drawCropCanvas() {
+  const canvas = cropCanvasRef.value
+  if (!canvas || !cropImage) return
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  const r = cropRect.value
+  const uiScale = canvasUiScale(cropCanvasRef.value)
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  ctx.drawImage(cropImage, 0, 0)
+  ctx.fillStyle = 'rgba(7, 21, 33, 0.58)'
+  ctx.fillRect(0, 0, canvas.width, r.y)
+  ctx.fillRect(0, r.y + r.height, canvas.width, canvas.height - r.y - r.height)
+  ctx.fillRect(0, r.y, r.x, r.height)
+  ctx.fillRect(r.x + r.width, r.y, canvas.width - r.x - r.width, r.height)
+  ctx.strokeStyle = '#62caff'
+  ctx.lineWidth = Math.max(2, 2.5 * uiScale)
+  ctx.setLineDash([8 * uiScale, 6 * uiScale])
+  ctx.strokeRect(r.x, r.y, r.width, r.height)
+  ctx.setLineDash([])
+  const handle = Math.max(8, 7 * uiScale)
+  ctx.fillStyle = '#ffffff'
+  ctx.strokeStyle = '#1876a9'
+  ctx.lineWidth = Math.max(1.5, 2 * uiScale)
+  for (const corner of [
+    [r.x, r.y],
+    [r.x + r.width, r.y],
+    [r.x + r.width, r.y + r.height],
+    [r.x, r.y + r.height],
+  ]) {
+    ctx.fillRect(corner[0] - handle / 2, corner[1] - handle / 2, handle, handle)
+    ctx.strokeRect(corner[0] - handle / 2, corner[1] - handle / 2, handle, handle)
+  }
+}
+
+function hitCropMode(point: { x: number; y: number }) {
+  const r = cropRect.value
+  const uiScale = canvasUiScale(cropCanvasRef.value)
+  const handleSize = Math.max(14 * uiScale, 12)
+  const corners: Array<[CropDragMode, number, number]> = [
+    ['nw', r.x, r.y],
+    ['ne', r.x + r.width, r.y],
+    ['se', r.x + r.width, r.y + r.height],
+    ['sw', r.x, r.y + r.height],
+  ]
+  for (const [mode, cx, cy] of corners) {
+    if (Math.abs(point.x - cx) <= handleSize && Math.abs(point.y - cy) <= handleSize) {
+      return mode
+    }
+  }
+  if (point.x >= r.x && point.x <= r.x + r.width && point.y >= r.y && point.y <= r.y + r.height) {
+    return 'move'
+  }
+  return null
+}
+
+function updateCropCursor(event: PointerEvent) {
+  if (cropDragMode) {
+    cropCursor.value = cropDragMode === 'move' ? 'grabbing' : `${cropDragMode}-resize`
+    return
+  }
+  const mode = hitCropMode(canvasPoint(event, cropCanvasRef.value))
+  if (mode === 'move') cropCursor.value = 'grab'
+  else if (mode) cropCursor.value = `${mode}-resize`
+  else cropCursor.value = 'crosshair'
+}
+
+function onCropPointerDown(event: PointerEvent) {
+  const point = canvasPoint(event, cropCanvasRef.value)
+  cropDragMode = hitCropMode(point)
+  if (!cropDragMode) return
+  cropDragStart = { x: point.x, y: point.y, rect: { ...cropRect.value } }
+  cropCursor.value = cropDragMode === 'move' ? 'grabbing' : `${cropDragMode}-resize`
+  cropCanvasRef.value?.setPointerCapture(event.pointerId)
+}
+
+function onCropPointerMove(event: PointerEvent) {
+  if (!cropDragMode) {
+    updateCropCursor(event)
+    return
+  }
+  const point = canvasPoint(event, cropCanvasRef.value)
+  const start = cropDragStart
+  let { x, y, width, height } = start.rect
+  if (cropDragMode === 'move') {
+    x = start.rect.x + (point.x - start.x)
+    y = start.rect.y + (point.y - start.y)
+  } else {
+    if (cropDragMode.includes('e')) width = point.x - start.rect.x
+    if (cropDragMode.includes('w')) {
+      width = start.rect.x + start.rect.width - point.x
+      x = point.x
+    }
+    if (cropDragMode.includes('s')) height = point.y - start.rect.y
+    if (cropDragMode.includes('n')) {
+      height = start.rect.y + start.rect.height - point.y
+      y = point.y
+    }
+  }
+  cropRect.value = { x, y, width, height }
+  normalizeCropRect()
+  drawCropCanvas()
+}
+
+function onCropPointerEnd(event: PointerEvent) {
+  cropDragMode = null
+  updateCropCursor(event)
+  try {
+    cropCanvasRef.value?.releasePointerCapture(event.pointerId)
+  } catch {}
+}
+
+async function applyCropAndAnalyze() {
+  if (!cropImage) return
+  const { x, y, width, height } = cropRect.value
+  const w = Math.max(1, Math.round(width))
+  const h = Math.max(1, Math.round(height))
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  ctx.drawImage(cropImage, Math.round(x), Math.round(y), w, h, 0, 0, w, h)
+
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, 'image/jpeg', 0.92)
+  })
+  if (!blob) {
+    ElMessage.error('裁剪失败，请重试')
+    return
+  }
+
+  cropMode.value = false
+  cropImage = null
+  if (previewUrl.value && previewUrl.value !== originalPreviewUrl.value) {
+    URL.revokeObjectURL(previewUrl.value)
+  }
+  previewUrl.value = URL.createObjectURL(blob)
+  const name = originalFile.value?.name?.replace(/(\.[^.]+)?$/, '_crop.jpg') ?? 'crop.jpg'
+  await uploadFile(new File([blob], name, { type: 'image/jpeg' }))
+}
+
+function reenterCropMode() {
+  if (!originalFile.value || !originalPreviewUrl.value) return
+  result.value = null
+  errorMsg.value = ''
+  manualMode.value = false
+  manualParams.value = null
+  adjustImage = null
+  if (previewUrl.value && previewUrl.value !== originalPreviewUrl.value) {
+    URL.revokeObjectURL(previewUrl.value)
+  }
+  previewUrl.value = originalPreviewUrl.value
+  cropMode.value = true
+  nextTick(loadCropCanvas)
 }
 
 async function reanalyze() {
@@ -160,12 +392,14 @@ function startManualAdjust() {
 }
 
 function clearPreview() {
-  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
-  previewUrl.value = null
+  revokePreviewUrls()
   currentFile.value = null
+  originalFile.value = null
   manualMode.value = false
+  cropMode.value = false
   manualParams.value = null
   adjustImage = null
+  cropImage = null
 }
 
 function loadAdjustCanvas() {
@@ -200,7 +434,7 @@ function drawAdjustCanvas() {
   if (!canvas || !p || !adjustImage) return
   const ctx = canvas.getContext('2d')
   if (!ctx) return
-  const uiScale = canvasUiScale()
+  const uiScale = canvasUiScale(canvas)
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   ctx.drawImage(adjustImage, 0, 0)
   ctx.lineWidth = Math.max(2, 3 * uiScale)
@@ -229,8 +463,7 @@ function drawCircle(ctx: CanvasRenderingContext2D, x: number, y: number, r: numb
   ctx.stroke()
 }
 
-function canvasDisplayMetrics() {
-  const canvas = adjustCanvasRef.value
+function canvasDisplayMetrics(canvas: HTMLCanvasElement | null) {
   if (!canvas) return null
   const rect = canvas.getBoundingClientRect()
   if (!rect.width || !rect.height || !canvas.width || !canvas.height) return null
@@ -264,9 +497,8 @@ function canvasDisplayMetrics() {
   }
 }
 
-function canvasPoint(event: PointerEvent) {
-  const canvas = adjustCanvasRef.value
-  const metrics = canvasDisplayMetrics()
+function canvasPoint(event: PointerEvent, canvas: HTMLCanvasElement | null) {
+  const metrics = canvasDisplayMetrics(canvas)
   if (!canvas || !metrics) return { x: 0, y: 0 }
   return {
     x: (event.clientX - metrics.left) * metrics.scaleX,
@@ -274,8 +506,8 @@ function canvasPoint(event: PointerEvent) {
   }
 }
 
-function canvasUiScale() {
-  const metrics = canvasDisplayMetrics()
+function canvasUiScale(canvas: HTMLCanvasElement | null) {
+  const metrics = canvasDisplayMetrics(canvas)
   if (!metrics) return 1
   return (metrics.scaleX + metrics.scaleY) / 2
 }
@@ -287,7 +519,7 @@ function hitMode(point: { x: number; y: number }) {
   const dx = point.x - p.center_x
   const dy = point.y - p.center_y
   const dist = Math.hypot(dx, dy)
-  const uiScale = canvasUiScale()
+  const uiScale = canvasUiScale(canvas)
   const lineTol = Math.max(12 * uiScale, 8)
   const crossTol = Math.max(10 * uiScale, 6)
   const crossHalf = 12 * uiScale
@@ -306,11 +538,11 @@ function updateAdjustCursor(event: PointerEvent) {
     adjustCursor.value = 'grabbing'
     return
   }
-  adjustCursor.value = hitMode(canvasPoint(event)) ? 'grab' : 'default'
+  adjustCursor.value = hitMode(canvasPoint(event, adjustCanvasRef.value)) ? 'grab' : 'default'
 }
 
 function onAdjustPointerDown(event: PointerEvent) {
-  const point = canvasPoint(event)
+  const point = canvasPoint(event, adjustCanvasRef.value)
   dragMode = hitMode(point)
   if (dragMode) {
     const p = manualParams.value
@@ -329,7 +561,7 @@ function onAdjustPointerMove(event: PointerEvent) {
     updateAdjustCursor(event)
     return
   }
-  const point = canvasPoint(event)
+  const point = canvasPoint(event, adjustCanvasRef.value)
   if (dragMode === 'move') {
     p.center_x = point.x - dragOffset.x
     p.center_y = point.y - dragOffset.y
@@ -392,7 +624,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopCamera()
-  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
+  revokePreviewUrls()
 })
 </script>
 
@@ -421,14 +653,30 @@ onBeforeUnmount(() => {
 
         <div class="camera-box">
           <video
-            v-show="cameraActive && !previewUrl && !manualMode"
+            v-show="cameraActive && !previewUrl && !manualMode && !cropMode"
             ref="videoRef"
             class="camera-video"
             autoplay
             playsinline
             muted
           />
-          <img v-if="previewUrl && !manualMode" :src="previewUrl" alt="预览" class="preview-img" />
+          <img
+            v-if="previewUrl && !manualMode && !cropMode"
+            :src="previewUrl"
+            alt="预览"
+            class="preview-img"
+          />
+          <canvas
+            v-show="cropMode"
+            ref="cropCanvasRef"
+            class="crop-canvas"
+            :style="{ cursor: cropCursor }"
+            @pointerdown="onCropPointerDown"
+            @pointermove="onCropPointerMove"
+            @pointerup="onCropPointerEnd"
+            @pointercancel="onCropPointerEnd"
+            @pointerleave="cropCursor = 'crosshair'"
+          />
           <canvas
             v-show="manualMode"
             ref="adjustCanvasRef"
@@ -440,7 +688,7 @@ onBeforeUnmount(() => {
             @pointercancel="onAdjustPointerEnd"
             @pointerleave="adjustCursor = 'default'"
           />
-          <div v-if="!cameraActive && !previewUrl && !manualMode" class="camera-placeholder">
+          <div v-if="!cameraActive && !previewUrl && !manualMode && !cropMode" class="camera-placeholder">
             <div class="placeholder-icon">●</div>
             <p>请开启摄像头或上传眼部图片</p>
           </div>
@@ -448,43 +696,65 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="actions">
-          <el-button type="primary" size="large" :loading="loading" @click="capturePhoto">
-            拍照分析
-          </el-button>
-          <el-button size="large" @click="fileInputRef?.click()">选择文件</el-button>
-          <input
-            ref="fileInputRef"
-            type="file"
-            accept="image/*"
-            class="hidden-input"
-            @change="onFileSelected"
-          />
-          <el-button
-            v-if="currentFile && previewUrl"
-            size="large"
-            :loading="loading"
-            @click="reanalyze"
-          >
-            重新识别
-          </el-button>
-          <el-button v-if="previewUrl" size="large" @click="clearPreview">清除预览</el-button>
-          <el-button
-            size="large"
-            :disabled="!previewUrl || !manualParams"
-            @click="startManualAdjust"
-          >
-            人工校准区域
-          </el-button>
-          <el-checkbox v-model="skipQuality" class="quality-toggle">
-            跳过质量检测
-          </el-checkbox>
-          <div class="mode-toggle">
-            <span class="mode-label">识别模式</span>
-            <el-radio-group v-model="detectMode" size="small" @change="reanalyze">
-              <el-radio-button value="auto">自动</el-radio-button>
-              <el-radio-button value="precise">清晰精定位</el-radio-button>
-              <el-radio-button value="rough">实拍粗略</el-radio-button>
-            </el-radio-group>
+          <template v-if="cropMode">
+            <el-button type="primary" size="large" :loading="loading" @click="applyCropAndAnalyze">
+              确认框选并识别
+            </el-button>
+            <el-button size="large" @click="clearPreview">取消</el-button>
+          </template>
+          <template v-else>
+            <el-button type="primary" size="large" @click="capturePhoto">
+              拍照
+            </el-button>
+            <el-button size="large" @click="fileInputRef?.click()">选择文件</el-button>
+            <input
+              ref="fileInputRef"
+              type="file"
+              accept="image/*"
+              class="hidden-input"
+              @change="onFileSelected"
+            />
+            <el-button
+              v-if="currentFile && previewUrl"
+              size="large"
+              :loading="loading"
+              @click="reanalyze"
+            >
+              重新识别
+            </el-button>
+            <el-button
+              v-if="originalFile && !cropMode"
+              size="large"
+              @click="reenterCropMode"
+            >
+              重新框选
+            </el-button>
+            <el-button v-if="previewUrl" size="large" @click="clearPreview">清除预览</el-button>
+            <el-button
+              size="large"
+              :disabled="!previewUrl || !manualParams"
+              @click="startManualAdjust"
+            >
+              人工校准区域
+            </el-button>
+            <el-checkbox v-model="skipQuality" class="quality-toggle">
+              跳过质量检测
+            </el-checkbox>
+            <div class="mode-toggle">
+              <span class="mode-label">识别模式</span>
+              <el-radio-group v-model="detectMode" size="small" @change="reanalyze">
+                <el-radio-button value="auto">自动</el-radio-button>
+                <el-radio-button value="precise">清晰精定位</el-radio-button>
+                <el-radio-button value="rough">实拍粗略</el-radio-button>
+              </el-radio-group>
+            </div>
+          </template>
+        </div>
+
+        <div v-if="cropMode" class="crop-panel">
+          <div class="crop-heading">
+            <strong>框选眼部区域</strong>
+            <span>拖动框体移动位置，拖动四角调整大小，仅识别框内图像</span>
           </div>
         </div>
 
@@ -543,15 +813,15 @@ onBeforeUnmount(() => {
         <div class="capture-tips">
           <div class="tip-item">
             <span>01</span>
-            <p>单眼特写，瞳孔尽量位于画面中心。</p>
+            <p>拍照或上传后，先框选单眼所在区域再识别。</p>
           </div>
           <div class="tip-item">
             <span>02</span>
-            <p>保持对焦清晰，避免强反光和过暗环境。</p>
+            <p>框选范围尽量贴近眼部，瞳孔位于框内中心附近。</p>
           </div>
           <div class="tip-item">
             <span>03</span>
-            <p>可直接上传已有眼部照片，无需拍摄全脸。</p>
+            <p>全脸或大图可先框选缩小范围，提高识别准确率。</p>
           </div>
         </div>
       </article>
@@ -780,7 +1050,8 @@ onBeforeUnmount(() => {
 
 .camera-video,
 .preview-img,
-.adjust-canvas {
+.adjust-canvas,
+.crop-canvas {
   display: block;
   width: 100%;
   height: auto;
@@ -788,7 +1059,8 @@ onBeforeUnmount(() => {
   object-fit: contain;
 }
 
-.adjust-canvas {
+.adjust-canvas,
+.crop-canvas {
   cursor: default;
   touch-action: none;
 }
@@ -852,6 +1124,29 @@ onBeforeUnmount(() => {
   border: 1px solid #dbe9f1;
   border-radius: 18px;
   background: #f8fbfd;
+}
+
+.crop-panel {
+  margin-top: 18px;
+  padding: 16px 18px;
+  border: 1px solid #cfe3f0;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #f3faff 0%, #f8fbfd 100%);
+}
+
+.crop-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #536a7b;
+  font-size: 13px;
+}
+
+.crop-heading strong {
+  color: #1b3348;
+  font-size: 15px;
 }
 
 .manual-heading {
