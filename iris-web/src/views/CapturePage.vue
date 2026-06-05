@@ -31,6 +31,11 @@ const adjustCursor = ref('default')
 const cropCursor = ref('crosshair')
 const skipQuality = ref(false)
 const detectMode = ref<DetectMode>('auto')
+const isCoarsePointer =
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(pointer: coarse)').matches
+const touchTolBoost = isCoarsePointer ? 1.8 : 1
 
 interface CropRect {
   x: number
@@ -217,7 +222,7 @@ function drawCropCanvas() {
 function hitCropMode(point: { x: number; y: number }) {
   const r = cropRect.value
   const uiScale = canvasUiScale(cropCanvasRef.value)
-  const handleSize = Math.max(14 * uiScale, 12)
+  const handleSize = Math.max(14 * uiScale, 12) * touchTolBoost
   const corners: Array<[CropDragMode, number, number]> = [
     ['nw', r.x, r.y],
     ['ne', r.x + r.width, r.y],
@@ -520,8 +525,8 @@ function hitMode(point: { x: number; y: number }) {
   const dy = point.y - p.center_y
   const dist = Math.hypot(dx, dy)
   const uiScale = canvasUiScale(canvas)
-  const lineTol = Math.max(12 * uiScale, 8)
-  const crossTol = Math.max(10 * uiScale, 6)
+  const lineTol = Math.max(12 * uiScale, 8) * touchTolBoost
+  const crossTol = Math.max(10 * uiScale, 6) * touchTolBoost
   const crossHalf = 12 * uiScale
   const onHorizontalCross = Math.abs(dy) <= crossTol && Math.abs(dx) <= crossHalf
   const onVerticalCross = Math.abs(dx) <= crossTol && Math.abs(dy) <= crossHalf
@@ -696,57 +701,65 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="actions">
+          <input
+            ref="fileInputRef"
+            type="file"
+            accept="image/*"
+            class="hidden-input"
+            @change="onFileSelected"
+          />
           <template v-if="cropMode">
-            <el-button type="primary" size="large" :loading="loading" @click="applyCropAndAnalyze">
-              确认框选并识别
-            </el-button>
-            <el-button size="large" @click="clearPreview">取消</el-button>
+            <div class="action-row action-row--primary">
+              <el-button type="primary" size="large" :loading="loading" @click="applyCropAndAnalyze">
+                确认框选并识别
+              </el-button>
+              <el-button size="large" @click="clearPreview">取消</el-button>
+            </div>
           </template>
           <template v-else>
-            <el-button type="primary" size="large" @click="capturePhoto">
-              拍照
-            </el-button>
-            <el-button size="large" @click="fileInputRef?.click()">选择文件</el-button>
-            <input
-              ref="fileInputRef"
-              type="file"
-              accept="image/*"
-              class="hidden-input"
-              @change="onFileSelected"
-            />
-            <el-button
-              v-if="currentFile && previewUrl"
-              size="large"
-              :loading="loading"
-              @click="reanalyze"
-            >
-              重新识别
-            </el-button>
-            <el-button
-              v-if="originalFile && !cropMode"
-              size="large"
-              @click="reenterCropMode"
-            >
-              重新框选
-            </el-button>
-            <el-button v-if="previewUrl" size="large" @click="clearPreview">清除预览</el-button>
-            <el-button
-              size="large"
-              :disabled="!previewUrl || !manualParams"
-              @click="startManualAdjust"
-            >
-              人工校准区域
-            </el-button>
-            <el-checkbox v-model="skipQuality" class="quality-toggle">
-              跳过质量检测
-            </el-checkbox>
-            <div class="mode-toggle">
-              <span class="mode-label">识别模式</span>
-              <el-radio-group v-model="detectMode" size="small" @change="reanalyze">
-                <el-radio-button value="auto">自动</el-radio-button>
-                <el-radio-button value="precise">清晰精定位</el-radio-button>
-                <el-radio-button value="rough">实拍粗略</el-radio-button>
-              </el-radio-group>
+            <div class="action-row action-row--primary">
+              <el-button type="primary" size="large" @click="capturePhoto">
+                拍照
+              </el-button>
+              <el-button size="large" @click="fileInputRef?.click()">选择文件</el-button>
+            </div>
+            <div v-if="previewUrl" class="action-row action-row--secondary">
+              <el-button
+                v-if="currentFile && previewUrl"
+                size="large"
+                :loading="loading"
+                @click="reanalyze"
+              >
+                重新识别
+              </el-button>
+              <el-button
+                v-if="originalFile"
+                size="large"
+                @click="reenterCropMode"
+              >
+                重新框选
+              </el-button>
+              <el-button
+                size="large"
+                :disabled="!previewUrl || !manualParams"
+                @click="startManualAdjust"
+              >
+                人工校准区域
+              </el-button>
+              <el-button size="large" @click="clearPreview">清除预览</el-button>
+            </div>
+            <div class="action-settings">
+              <el-checkbox v-model="skipQuality" class="quality-toggle">
+                跳过质量检测
+              </el-checkbox>
+              <div class="mode-toggle">
+                <span class="mode-label">识别模式</span>
+                <el-radio-group v-model="detectMode" size="small" @change="reanalyze">
+                  <el-radio-button value="auto">自动</el-radio-button>
+                  <el-radio-button value="precise">清晰精定位</el-radio-button>
+                  <el-radio-button value="rough">实拍粗略</el-radio-button>
+                </el-radio-group>
+              </div>
             </div>
           </template>
         </div>
@@ -915,6 +928,8 @@ onBeforeUnmount(() => {
 .page-shell {
   min-height: 100vh;
   padding: 32px 24px 56px;
+  padding-left: max(24px, env(safe-area-inset-left));
+  padding-right: max(24px, env(safe-area-inset-right));
   background:
     radial-gradient(circle at top left, rgba(38, 132, 255, 0.14), transparent 34%),
     linear-gradient(135deg, #f5f9fc 0%, #eef5f8 48%, #f9fbfd 100%);
@@ -1094,15 +1109,35 @@ onBeforeUnmount(() => {
 
 .actions {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
   gap: 12px;
   margin-top: 18px;
 }
 
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.action-row :deep(.el-button) {
+  margin-left: 0;
+}
+
+.action-settings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 18px;
+  padding: 12px 14px;
+  border: 1px solid #e2eef5;
+  border-radius: 14px;
+  background: #f8fbfd;
+}
+
 .quality-toggle {
   min-height: 40px;
-  padding: 0 8px;
 }
 
 .mode-toggle {
@@ -1110,11 +1145,11 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   min-height: 40px;
-  padding: 0 8px;
 }
 
 .mode-label {
   font-size: 14px;
+  white-space: nowrap;
   color: var(--el-text-color-regular, #606266);
 }
 
@@ -1182,7 +1217,9 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   width: 100%;
   margin-top: 6px;
-  padding: 9px 10px;
+  padding: 10px 12px;
+  /* 16px 可避免 iOS 聚焦时自动放大页面 */
+  font-size: 16px;
   border: 1px solid #cfdde7;
   border-radius: 10px;
   outline: none;
@@ -1406,6 +1443,8 @@ onBeforeUnmount(() => {
 @media (max-width: 980px) {
   .page-shell {
     padding: 22px 16px 40px;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
   }
 
   .hero {
@@ -1425,59 +1464,131 @@ onBeforeUnmount(() => {
 
 @media (max-width: 640px) {
   .page-shell {
-    padding: 14px 12px 28px;
+    padding: 12px 12px calc(24px + env(safe-area-inset-bottom));
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
   }
 
   .hero,
   .clinical-card {
-    border-radius: 20px;
+    border-radius: 18px;
   }
 
   .hero {
-    padding: 22px 18px;
+    gap: 12px;
+    margin-bottom: 14px;
+    padding: 16px 18px;
   }
 
   .hero h1 {
-    font-size: 30px;
+    font-size: 24px;
   }
 
   .hero p {
     font-size: 14px;
   }
 
+  .eyebrow {
+    margin-bottom: 6px;
+    font-size: 11px;
+  }
+
   .hero-status {
-    width: 100%;
-    justify-content: center;
+    align-self: flex-start;
+    padding: 8px 14px;
+    font-size: 13px;
+  }
+
+  .workflow-grid {
+    gap: 14px;
   }
 
   .clinical-card {
-    padding: 16px;
+    padding: 16px 14px;
   }
 
   .card-header {
-    align-items: stretch;
-    flex-direction: column;
+    align-items: center;
+    margin-bottom: 14px;
   }
 
+  .card-header h2 {
+    font-size: 20px;
+  }
+
+  /* 相机/预览区域使用视口高度，单眼特写更易对准 */
   .camera-box {
-    min-height: 220px;
-    border-radius: 18px;
+    min-height: min(64vh, 460px);
+    border-radius: 16px;
   }
 
-  .actions {
+  .camera-video,
+  .preview-img,
+  .adjust-canvas,
+  .crop-canvas {
+    max-height: min(64vh, 460px);
+  }
+
+  /* 主操作两列、次操作两列，触控更顺手 */
+  .action-row {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
   }
 
-  .actions :deep(.el-button) {
+  .action-row--secondary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .action-row :deep(.el-button) {
     width: 100%;
+    min-height: 48px;
     margin-left: 0;
   }
 
+  .action-settings {
+    gap: 12px;
+  }
+
+  .mode-toggle {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .mode-toggle :deep(.el-radio-group) {
+    display: flex;
+    width: 100%;
+  }
+
+  .mode-toggle :deep(.el-radio-button) {
+    flex: 1;
+  }
+
+  .mode-toggle :deep(.el-radio-button__inner) {
+    width: 100%;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
   .capture-tips,
-  .metrics-grid,
   .evidence-grid {
     grid-template-columns: 1fr;
+  }
+
+  .metrics-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .metric-card {
+    padding: 12px 8px;
+    text-align: center;
+  }
+
+  .metric-card strong {
+    font-size: 18px;
   }
 
   .manual-fields {
@@ -1486,7 +1597,14 @@ onBeforeUnmount(() => {
 
   .result-loading,
   .empty-state {
-    min-height: 260px;
+    min-height: 200px;
+  }
+}
+
+/* 超窄屏（如 320~360px）主操作改为单列，避免文字挤压换行 */
+@media (max-width: 360px) {
+  .action-row--primary {
+    grid-template-columns: 1fr;
   }
 }
 </style>

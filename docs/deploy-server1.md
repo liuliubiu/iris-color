@@ -3,7 +3,9 @@
 - **主机**：119.91.207.69  
 - **目录**：`/home/server/iris-color`  
 - **端口**：iris-api **8090**，iris-vision **8003**（仅本机监听，不对外暴露）  
-- **对外**：沿用现有 Nginx 的 **80 / 443** + **域名**
+- **对外**：该机 80 端口已被其它项目占用，iris 用 **独立端口 8088（HTTP）** 跑通外网访问，之后再加域名 / HTTPS
+
+> 当前目标：**先不配域名、不碰 80**，用 `http://119.91.207.69:8088` 外网访问 iris，**不影响**原有站点。域名 + HTTPS 见 **五.3 方案 B**（以后再做）。
 
 ---
 
@@ -19,7 +21,10 @@
 
 ---
 
-## 二、域名要怎么做？（不能“只填域名就用”）
+## 二、域名要怎么做？（本次可跳过，先用 IP）
+
+> **本次部署先不做域名**，用独立端口 `http://119.91.207.69:8088` 访问即可（见 **五.3 方案 A**）。  
+> 下面这一节是以后要上域名 + HTTPS 时的步骤，现在可以略过。
 
 需要 **三步都做完** 才能用 `https://iris.公司域名.com` 访问：
 
@@ -85,6 +90,11 @@ XFTP：上传 `iris-api\target\iris-api-0.0.1-SNAPSHOT.jar` → `/home/server/ir
 XFTP：上传整个 `iris-vision` 目录（排除 `.venv`、`__pycache__` 可减小体积；或在服务器上重新建 venv）。
 
 **模型文件**：本地若已有 `iris-vision/assets/models/face_landmarker.task`，一并上传；否则在服务器执行 `python scripts/download_model.py`（需能访问外网）。
+
+> **只有「首次」需要整目录上传 + 五.1 的安装。** 以后改代码**不必**全量重传、也**不必**重建 venv：  
+> - 只改了 `.py` / `config/*.yaml` → 只覆盖那几个文件 → `./stop.sh && ./start.sh`（无需 pip install）。  
+> - 改了 `requirements.txt`（依赖变动）→ 传该文件 → 进 venv 跑一次 `pip install -r requirements.txt` → 重启。  
+> - `.venv`（大）和 `assets/models`（模型）已在服务器上，日常更新**不用**再传。
 
 ---
 
@@ -316,7 +326,7 @@ curl -s http://127.0.0.1:8090/api/v1/health
 
 ---
 
-### 3. Nginx（域名 + HTTPS）
+### 3. Nginx（外网访问）
 
 先查看现有配置位置：
 
@@ -324,6 +334,67 @@ curl -s http://127.0.0.1:8090/api/v1/health
 /usr/local/nginx/sbin/nginx -t
 # 常见：/usr/local/nginx/conf/nginx.conf 或 conf/vhost/*.conf
 ```
+
+> 两种方案二选一：**方案 A**（本次推荐，IP + HTTP，先跑通外网）；**方案 B**（以后再做，域名 + HTTPS）。
+
+---
+
+#### 方案 A：先用 IP + 独立端口（无域名，HTTP，零干扰现有站点）
+
+> ⚠️ **不要**给 iris 写 `listen 80; server_name 119.91.207.69;`。  
+> 该服务器 80 端口已有其它项目的默认站点，直接访问 `http://119.91.207.69` 能打开。
+> 若把 IP 写成 iris 的 `server_name`，浏览器用 IP 访问时(`Host: 119.91.207.69`)会被 iris **精确命中并抢走**原站点 —— 会影响现有服务。  
+> 正确做法：让 iris **独占一个新端口**(下面用 `8088`)，完全不碰 80。
+
+新增一个站点配置（建议放到 `conf/vhost/iris.conf`，或直接加到 `nginx.conf` 的 `http { ... }` 块内）：
+
+```nginx
+server {
+    listen 8088;          # iris 专用端口，与现有 80/443 互不影响
+    server_name _;        # 该端口上只有这一个 server，用通配即可
+
+    root /home/server/iris-color/iris-web/dist;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8090;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        client_max_body_size 10m;
+        proxy_read_timeout 120s;
+    }
+}
+```
+
+检查并重载：
+
+```bash
+/usr/local/nginx/sbin/nginx -t && /usr/local/nginx/sbin/nginx -s reload
+```
+
+**两件事必须确认，否则外网打不开：**
+
+1. **选一个没被占用的端口**（这里用 `8088`，避开已用的 80/443/8001/8002/8097/8003/8090）。先确认它没人用：
+
+```bash
+ss -tln | grep 8088   # 无输出 = 没被占用，可用
+```
+
+2. **云服务器安全组 / 防火墙放行该端口**（腾讯云控制台 → 安全组 → 入站规则，加 `TCP:8088` 来源 `0.0.0.0/0`）。  
+   服务器本地若开了 firewalld：`firewall-cmd --permanent --add-port=8088/tcp && firewall-cmd --reload`。
+
+验证：浏览器打开 **`http://119.91.207.69:8088`**，上传图片能返回 Grade，即外网访问完成；同时原 `http://119.91.207.69` 仍正常 = 未影响现有站点。
+
+> 注意：HTTP（非 HTTPS）下，部分浏览器/手机对**调用摄像头**有限制（`getUserMedia` 在非 `localhost` 的 HTTP 页面通常被禁用）。若只用「上传图片」功能不受影响；要用「拍照」功能，请走 **方案 B** 的 HTTPS。
+
+---
+
+#### 方案 B：域名 + HTTPS（以后再做）
 
 在**不影响现有站点**的前提下，新增站点（把 `iris.你的公司域名.com` 换成实际子域名）：
 
@@ -414,14 +485,15 @@ curl http://127.0.0.1:8090/api/v1/health
 ss -tln | grep -E '8003|8090'    # 应只有 127.0.0.1 或 * 监听，勿与 8001/8002/8097 冲突
 ```
 
-浏览器打开：`https://iris.你的公司域名.com`，拍照或上传，看是否返回 Grade。
+浏览器打开（本次用 IP + 独立端口）：`http://119.91.207.69:8088`，上传图片看是否返回 Grade；同时确认原 `http://119.91.207.69` 仍正常。  
+（以后上了域名 + HTTPS：`https://iris.你的公司域名.com`，可正常用拍照功能。）
 
 ---
 
 ## 八、常见问题
 
 **Q：没有子域名，只能用 IP？**  
-可临时用 IP 访问：Nginx 里 `server_name` 填 IP 或 `_`，用 `http://119.91.207.69`（需与安全组放行 80 一致）。正式环境仍建议子域名 + HTTPS。
+可以，按 **五.3 方案 A**：iris 用**独立端口**（如 `8088`），访问 `http://119.91.207.69:8088`，并**安全组放行 8088**。**切勿**把 IP 写成 iris 的 `server_name` 占 80，否则会抢走该机原有的 IP 默认站点。HTTP 下「拍照(摄像头)」可能被浏览器禁用，「上传图片」不受影响；要用拍照请上 HTTPS（方案 B）。
 
 **Q：8090/8003 要改防火墙吗？**  
 若只监听 `127.0.0.1`，**不需要**对公网开放 8090/8003；只暴露 80/443。

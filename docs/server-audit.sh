@@ -56,7 +56,7 @@ _listen_check() {
   fi
   return 1
 }
-for p in 80 443 8080 8000 5173 3306; do
+for p in 80 443 8080 8000 5173 3306 8088 8003 8090; do
   if _listen_check "$p"; then
     echo "  端口 $p : 已占用"
   else
