@@ -102,6 +102,12 @@ XFTP：上传整个 `iris-vision` 目录（排除 `.venv`、`__pycache__` 可减
 
 ### 1. Python 环境
 
+> **先装系统库**：mediapipe 会拉入完整版 OpenCV，需要 `libGL.so.1`。RHEL 系（OpenCloudOS / CentOS）默认没有，不装会报 `ImportError: libGL.so.1`。
+
+```bash
+yum install -y mesa-libGL        # 或 dnf install -y mesa-libGL；个别环境再加 glib2
+```
+
 ```bash
 cd /home/server/iris-color/iris-vision
 python3 -m venv .venv
@@ -110,6 +116,9 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 python scripts/download_model.py   # 若未上传模型
 deactivate
 ```
+
+> 若无 root 装不了系统库，可改为强制 headless 版 OpenCV：  
+> `pip uninstall -y opencv-contrib-python opencv-python && pip install opencv-python-headless -i https://pypi.tuna.tsinghua.edu.cn/simple`
 
 确认 venv 已建好（隐藏目录，普通 `ls` 看不到）：
 
@@ -171,9 +180,17 @@ else
   echo "iris-api 已启动 (pid $(cat logs/api.pid))"
 fi
 
-sleep 2
-curl -sf http://127.0.0.1:8003/health && echo "  vision OK" || echo "  vision FAIL — 见 logs/vision.log"
-curl -sf http://127.0.0.1:8090/api/v1/health && echo "  api OK" || echo "  api FAIL — 见 logs/api.log"
+# 健康检查：轮询重试，避免在服务尚未起好时误报 FAIL（api 启动约需 3~5 秒）
+check() {
+  local name=$1 url=$2 log=$3 i
+  for i in $(seq 1 20); do
+    if curl -sf "$url" >/dev/null 2>&1; then echo "  $name OK"; return 0; fi
+    sleep 1
+  done
+  echo "  $name FAIL — 见 $log"
+}
+check vision http://127.0.0.1:8003/health logs/vision.log
+check api    http://127.0.0.1:8090/api/v1/health logs/api.log
 EOF
 
 cat > /home/server/iris-color/stop.sh << 'EOF'
