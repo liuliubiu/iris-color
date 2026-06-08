@@ -33,6 +33,7 @@ const adjustCursor = ref('default')
 const cropCursor = ref('crosshair')
 const skipQuality = ref(false)
 const detectMode = ref<DetectMode>('auto')
+const settingsOpen = ref(false)
 const isCoarsePointer =
   typeof window !== 'undefined' &&
   typeof window.matchMedia === 'function' &&
@@ -349,6 +350,12 @@ async function reanalyze() {
   await uploadFile(file)
 }
 
+function onModeChange() {
+  // 移动端从顶栏面板切换模式后收起面板，再重新识别
+  settingsOpen.value = false
+  reanalyze()
+}
+
 function scrollResultIntoView(target: 'card' | 'diagnosis' = 'card') {
   // 仅在窄屏（结果卡片堆叠在采集卡片下方）时自动滚动
   if (typeof window === 'undefined') return
@@ -661,11 +668,43 @@ onBeforeUnmount(() => {
         <span class="eyebrow">IRIS COLOR ANALYSIS</span>
         <h1>虹膜颜色识别</h1>
       </div>
-      <div class="hero-status">
-        <span class="status-dot" :class="{ active: cameraActive }"></span>
-        <span>{{ cameraActive ? '摄像头已就绪' : '摄像头未接入' }}</span>
+      <div class="hero-actions">
+        <div class="hero-status">
+          <span class="status-dot" :class="{ active: cameraActive }"></span>
+          <span>{{ cameraActive ? '摄像头已就绪' : '摄像头未接入' }}</span>
+        </div>
+        <button
+          type="button"
+          class="settings-btn"
+          :class="{ active: settingsOpen }"
+          aria-label="检测设置"
+          @click="settingsOpen = !settingsOpen"
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
       </div>
     </section>
+
+    <transition name="settings-slide">
+      <div v-if="settingsOpen" class="mobile-settings-panel">
+        <div class="settings-row">
+          <span class="settings-label">跳过质量检测</span>
+          <el-switch v-model="skipQuality" />
+        </div>
+        <div class="settings-row settings-row--column">
+          <span class="settings-label">识别模式</span>
+          <el-radio-group v-model="detectMode" size="small" @change="onModeChange">
+            <el-radio-button value="auto">自动</el-radio-button>
+            <el-radio-button value="precise">清晰精定位</el-radio-button>
+            <el-radio-button value="rough">实拍粗略</el-radio-button>
+          </el-radio-group>
+        </div>
+      </div>
+    </transition>
+    <div v-if="settingsOpen" class="mobile-settings-backdrop" @click="settingsOpen = false"></div>
 
     <section class="workflow-grid">
       <article class="clinical-card capture-card">
@@ -765,7 +804,7 @@ onBeforeUnmount(() => {
                 :disabled="!previewUrl || !manualParams"
                 @click="startManualAdjust"
               >
-                人工校准区域
+                人工校准
               </el-button>
               <el-button size="large" @click="clearPreview">清除预览</el-button>
             </div>
@@ -1025,6 +1064,20 @@ onBeforeUnmount(() => {
 .status-dot.active {
   background: #19b57a;
   box-shadow: 0 0 0 6px rgba(25, 181, 122, 0.14);
+}
+
+.hero-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+
+/* 顶栏设置按钮与展开面板默认仅移动端可见 */
+.settings-btn,
+.mobile-settings-panel,
+.mobile-settings-backdrop {
+  display: none;
 }
 
 .workflow-grid {
@@ -1466,6 +1519,18 @@ onBeforeUnmount(() => {
   background: #071521;
 }
 
+/* 顶栏设置面板展开/收起动画 */
+.settings-slide-enter-active,
+.settings-slide-leave-active {
+  transition: transform 0.22s ease, opacity 0.22s ease;
+}
+
+.settings-slide-enter-from,
+.settings-slide-leave-to {
+  transform: translateY(-10px);
+  opacity: 0;
+}
+
 @media (max-width: 980px) {
   .page-shell {
     padding: 22px 16px 40px;
@@ -1488,49 +1553,83 @@ onBeforeUnmount(() => {
   }
 }
 
+/* ============ 移动端 App 化布局（固定顶栏 + 固定底部操作栏） ============ */
 @media (max-width: 640px) {
   .page-shell {
-    padding: 12px 12px calc(24px + env(safe-area-inset-bottom));
+    /* 为固定顶栏与底部操作栏预留空间，中间内容区独立滚动 */
+    padding: calc(60px + env(safe-area-inset-top)) 0 calc(150px + env(safe-area-inset-bottom));
     padding-left: max(12px, env(safe-area-inset-left));
     padding-right: max(12px, env(safe-area-inset-right));
   }
 
-  .hero,
-  .clinical-card {
-    border-radius: 18px;
+  /* —— 顶部应用导航栏 —— */
+  .hero {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 60;
+    align-items: center;
+    flex-direction: row;
+    justify-content: space-between;
+    gap: 12px;
+    max-width: none;
+    margin: 0;
+    padding: 10px 16px;
+    padding-top: calc(10px + env(safe-area-inset-top));
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+    border: none;
+    border-bottom: 1px solid rgba(32, 112, 171, 0.14);
+    border-radius: 0;
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 4px 18px rgba(31, 76, 112, 0.08);
+    backdrop-filter: saturate(1.4) blur(14px);
   }
 
-  .hero {
-    gap: 12px;
-    margin-bottom: 14px;
-    padding: 16px 18px;
+  .hero-copy {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: none;
+  }
+
+  /* 标题前的品牌色竖条，强化 App 标识感 */
+  .hero-copy::before {
+    width: 4px;
+    height: 20px;
+    border-radius: 3px;
+    background: linear-gradient(180deg, #2f92c4, #1876a9);
+    content: '';
+  }
+
+  .hero .eyebrow {
+    display: none;
   }
 
   .hero h1 {
-    font-size: 24px;
-  }
-
-  .hero p {
-    font-size: 14px;
-  }
-
-  .eyebrow {
-    margin-bottom: 6px;
-    font-size: 11px;
+    margin: 0;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
   }
 
   .hero-status {
-    align-self: flex-start;
-    padding: 8px 14px;
-    font-size: 13px;
+    flex: 0 0 auto;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
   }
 
   .workflow-grid {
-    gap: 14px;
+    gap: 12px;
   }
 
+  /* —— 内容卡片：更扁平、专业 —— */
   .clinical-card {
     padding: 16px 14px;
+    border-radius: 16px;
+    box-shadow: 0 8px 24px rgba(36, 82, 118, 0.06);
   }
 
   .card-header {
@@ -1539,63 +1638,189 @@ onBeforeUnmount(() => {
   }
 
   .card-header h2 {
-    font-size: 20px;
+    font-size: 19px;
+  }
+
+  .section-kicker {
+    margin-bottom: 6px;
+    font-size: 11px;
   }
 
   /* 相机/预览区域使用视口高度，单眼特写更易对准 */
   .camera-box {
-    min-height: min(64vh, 460px);
-    border-radius: 16px;
+    min-height: min(60vh, 440px);
+    border-radius: 14px;
   }
 
   .camera-video,
   .preview-img,
   .adjust-canvas,
   .crop-canvas {
-    max-height: min(64vh, 460px);
+    max-height: min(60vh, 440px);
   }
 
-  /* 主操作两列、次操作两列，触控更顺手 */
-  .action-row {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 10px;
+  /* —— 顶栏设置按钮 —— */
+  .settings-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    border: 1px solid #d6eaf3;
+    border-radius: 12px;
+    background: #f7fcff;
+    color: #2a5b78;
+    cursor: pointer;
+    transition: transform 0.12s ease, background 0.15s ease, color 0.15s ease;
   }
 
-  .action-row--secondary {
-    grid-template-columns: repeat(2, 1fr);
+  .settings-btn:active {
+    transform: scale(0.94);
   }
 
-  .action-row :deep(.el-button) {
-    width: 100%;
-    min-height: 48px;
-    margin-left: 0;
+  .settings-btn.active {
+    border-color: #2f92c4;
+    background: #2f92c4;
+    color: #fff;
   }
 
-  .action-settings {
+  /* —— 顶栏展开的设置面板 —— */
+  .mobile-settings-panel {
+    position: fixed;
+    top: calc(56px + env(safe-area-inset-top));
+    left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
+    z-index: 59;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 16px;
+    border: 1px solid rgba(32, 112, 171, 0.14);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.98);
+    box-shadow: 0 16px 40px rgba(31, 76, 112, 0.18);
+    backdrop-filter: saturate(1.4) blur(14px);
+  }
+
+  .mobile-settings-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 58;
+    display: block;
+    background: rgba(7, 21, 33, 0.32);
+  }
+
+  .settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     gap: 12px;
   }
 
-  .mode-toggle {
+  .settings-row--column {
     flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-    width: 100%;
+    align-items: stretch;
+    gap: 10px;
   }
 
-  .mode-toggle :deep(.el-radio-group) {
+  .settings-label {
+    color: #2b4256;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .mobile-settings-panel :deep(.el-radio-group) {
     display: flex;
     width: 100%;
   }
 
-  .mode-toggle :deep(.el-radio-button) {
+  .mobile-settings-panel :deep(.el-radio-button) {
     flex: 1;
   }
 
-  .mode-toggle :deep(.el-radio-button__inner) {
+  .mobile-settings-panel :deep(.el-radio-button__inner) {
     width: 100%;
     padding-left: 0;
     padding-right: 0;
+  }
+
+  /* —— 底部固定操作栏：主操作 + 子操作 —— */
+  .actions {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 60;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 8px;
+    margin: 0;
+    padding: 10px 14px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    padding-left: max(14px, env(safe-area-inset-left));
+    padding-right: max(14px, env(safe-area-inset-right));
+    border-top: 1px solid rgba(32, 112, 171, 0.14);
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 -4px 18px rgba(31, 76, 112, 0.1);
+    backdrop-filter: saturate(1.4) blur(14px);
+  }
+
+  /* 主操作：醒目 */
+  .action-row--primary {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin: 0;
+  }
+
+  .action-row--primary :deep(.el-button) {
+    width: 100%;
+    min-height: 50px;
+    margin-left: 0;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    transition: transform 0.12s ease;
+  }
+
+  /* 子操作：识别后出现，更小、视觉次一级 */
+  .action-row--secondary {
+    display: flex;
+    gap: 8px;
+    margin: 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(32, 112, 171, 0.1);
+  }
+
+  .action-row--secondary :deep(.el-button) {
+    flex: 1;
+    min-width: 0;
+    min-height: 38px;
+    margin-left: 0;
+    padding: 0 6px;
+    border-radius: 10px;
+    color: #436076;
+    background: #f3f8fb;
+    border-color: #d9e7f0;
+    font-size: 12px;
+    font-weight: 500;
+    transition: transform 0.12s ease;
+  }
+
+  .action-row--secondary :deep(.el-button.is-disabled) {
+    color: #a7b8c5;
+    background: #f6f9fb;
+  }
+
+  /* 触控按压反馈，营造原生点击手感 */
+  .actions :deep(.el-button:active) {
+    transform: scale(0.96);
+  }
+
+  /* 卡片内的设置整块已移至顶栏，移动端隐藏 */
+  .action-settings {
+    display: none;
   }
 
   /* 移动端隐藏采集提示，节省纵向空间 */
@@ -1628,13 +1853,6 @@ onBeforeUnmount(() => {
   .result-loading,
   .empty-state {
     min-height: 200px;
-  }
-}
-
-/* 超窄屏（如 320~360px）主操作改为单列，避免文字挤压换行 */
-@media (max-width: 360px) {
-  .action-row--primary {
-    grid-template-columns: 1fr;
   }
 }
 </style>
