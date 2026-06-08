@@ -348,6 +348,11 @@ def _detect_rough(
         sclera_s_max=disk_cfg.get("sclera_s_max", 60.0),
         sclera_bilateral_min=disk_cfg.get("sclera_bilateral_min", 0.0),
         target_min_dim=int(disk_cfg.get("target_min_dim", 700)),
+        sclera_global_weight=disk_cfg.get("sclera_global_weight", 0.8),
+        bilateral_weight=disk_cfg.get("bilateral_weight", 0.8),
+        local_edge_weight=disk_cfg.get("local_edge_weight", 0.0),
+        local_edge_min_step=disk_cfg.get("local_edge_min_step", 12.0),
+        compactness_weight=disk_cfg.get("compactness_weight", 0.0),
     )
     if disk is None:
         return None

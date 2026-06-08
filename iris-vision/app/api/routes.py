@@ -104,24 +104,38 @@ def _to_analysis_response(result, image_bgr: np.ndarray, config: dict) -> Analys
     )
 
 
+# 质量问题码 → 一般用户能看懂的中文（含改善建议）
+_QUALITY_ISSUE_MESSAGES = {
+    "image_too_blurry": "照片太模糊（请对焦清晰、保持手机稳定后重拍）",
+    "image_overexposed": "照片过曝（请避开强光/闪光，调低亮度后重拍）",
+    "eye_closed": "未检测到睁开的眼睛（请睁大眼睛、正对镜头）",
+}
+
+# 其它失败码 → 中文友好文案
+_ERROR_MESSAGES = {
+    "no_iris_detected": "未识别到虹膜，请上传单眼特写（瞳孔居中、对焦清晰、光线均匀）。",
+    "insufficient_iris_samples": "识别到的虹膜区域过小，请让眼睛更靠近镜头、占满画面后重拍。",
+    "no_valid_pixels_after_highlight_removal": "虹膜区域反光或高光过多，请避开灯光、屏幕、窗户反光后重拍。",
+}
+
+
+def _quality_failure_message(quality) -> str:
+    """把质量检测的 issues 列表拼成中文提示。"""
+    parts = [_QUALITY_ISSUE_MESSAGES.get(code, code) for code in (quality.issues or [])]
+    if not parts:
+        parts = ["照片质量不达标"]
+    return "图像质量检测未通过：" + "；".join(parts) + "。"
+
+
 def _raise_analysis_error(exc: AnalysisError) -> None:
+    """把内部错误码转成中文友好文案（detail 为字符串，前端可直接展示，无需改 iris-web）。"""
     if exc.code == "quality_check_failed" and exc.quality:
         raise HTTPException(
-            status_code=422,
-            detail={
-                "success": False,
-                "error": exc.code,
-                "quality": {
-                    "blur_score": exc.quality.blur_score,
-                    "overexposed_ratio": exc.quality.overexposed_ratio,
-                    "eye_open": exc.quality.eye_open,
-                    "sample_pixel_count": 0,
-                    "issues": exc.quality.issues,
-                },
-            },
+            status_code=422, detail=_quality_failure_message(exc.quality)
         ) from exc
     status = 400 if exc.code == "no_iris_detected" else 422
-    raise HTTPException(status_code=status, detail=exc.code) from exc
+    message = _ERROR_MESSAGES.get(exc.code, "分析失败，请重试或更换更清晰的单眼特写照片。")
+    raise HTTPException(status_code=status, detail=message) from exc
 
 
 @router.get("/health", response_model=HealthResponse)

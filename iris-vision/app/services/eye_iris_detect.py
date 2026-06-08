@@ -624,6 +624,74 @@ def _bilateral_sclera_fraction(
     return min(left, right)
 
 
+def _local_edge_support(
+    luminance: np.ndarray,
+    cx: float,
+    cy: float,
+    radius: float,
+    min_step: float,
+) -> float:
+    """边界处「紧邻外侧亮于紧邻内侧」的角度占比（局部亮度跃升）。
+
+    真实虹膜圆的边界几乎处处是「虹膜→巩膜/眼睑」的真实亮度边；而锁在眉毛上的
+    大圈，其顶部/两侧边界穿过的是「皮肤→皮肤」，没有跃升。与 _surround_stats
+    （对比全局内部均值）不同，这里比同一角度的内外局部，能拒绝「圈内混入大片亮肤」
+    的眉毛误检（眉毛误检常因全局对比/巩膜占比虚高而被选中）。
+    """
+    angles = np.linspace(0, 2 * np.pi, 32, endpoint=False)
+    in_r = radius * 0.85
+    out_r = radius * 1.15
+    v_in = _sample_luminance_at(
+        luminance, cx + np.cos(angles) * in_r, cy + np.sin(angles) * in_r
+    )
+    v_out = _sample_luminance_at(
+        luminance, cx + np.cos(angles) * out_r, cy + np.sin(angles) * out_r
+    )
+    return float(np.mean((v_out - v_in) > min_step))
+
+
+def _dark_core_compactness(
+    luminance: np.ndarray,
+    cx: float,
+    cy: float,
+    radius: float,
+) -> float:
+    """候选圆内暗核的「居中且致密」程度，[0,1]。
+
+    虹膜/瞳孔暗核居中、近圆；眉毛暗带偏上、细长。取圆内暗像素的最大连通域，
+    综合其质心居中度、近圆度与填充度。仅作加分项（与巩膜证据正交）。
+    """
+    h, w = luminance.shape[:2]
+    r = int(max(radius, 2))
+    x1, y1 = max(int(cx - r), 0), max(int(cy - r), 0)
+    x2, y2 = min(int(cx + r), w), min(int(cy + r), h)
+    roi = luminance[y1:y2, x1:x2]
+    if roi.size == 0:
+        return 0.0
+    local_cx, local_cy = cx - x1, cy - y1
+    circ = np.zeros(roi.shape, dtype=np.uint8)
+    cv2.circle(circ, (int(local_cx), int(local_cy)), r, 255, -1)
+    inside = roi[circ > 0]
+    if inside.size == 0:
+        return 0.0
+    thr = float(np.percentile(inside, 45))
+    dark = ((roi <= thr) & (circ > 0)).astype(np.uint8)
+    num, _, stats, centroids = cv2.connectedComponentsWithStats(dark, connectivity=8)
+    if num <= 1:
+        return 0.0
+    largest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    area = float(stats[largest, cv2.CC_STAT_AREA])
+    ccx, ccy = centroids[largest]
+    offset = ((ccx - local_cx) ** 2 + (ccy - local_cy) ** 2) ** 0.5 / max(r, 1)
+    bw = float(stats[largest, cv2.CC_STAT_WIDTH])
+    bh = float(stats[largest, cv2.CC_STAT_HEIGHT])
+    aspect = max(bw, bh) / max(min(bw, bh), 1.0)
+    fill = area / max(np.pi * r * r, 1.0)
+    centered = max(0.0, 1.0 - offset)
+    roundness = max(0.0, 1.0 - (aspect - 1.0) / 2.0)
+    return float(np.clip(centered * 0.5 + roundness * 0.3 + min(fill / 0.4, 1.0) * 0.2, 0.0, 1.0))
+
+
 def detect_iris_disk(
     image_bgr: np.ndarray,
     dark_percentile: float = 35.0,
@@ -638,6 +706,11 @@ def detect_iris_disk(
     sclera_s_max: float = 60.0,
     sclera_bilateral_min: float = 0.0,
     target_min_dim: int = 700,
+    sclera_global_weight: float = 0.8,
+    bilateral_weight: float = 0.8,
+    local_edge_weight: float = 0.0,
+    local_edge_min_step: float = 12.0,
+    compactness_weight: float = 0.0,
 ) -> Optional[IrisDiskEstimate]:
     """
     黑盘直检：直接用 Hough 找虹膜/巩膜的圆形边界，再用「内暗外亮」验证。
@@ -707,14 +780,29 @@ def detect_iris_disk(
         if sclera_bilateral_min > 0.0 and bilateral < sclera_bilateral_min:
             continue
 
+        # 多证据（与巩膜正交）：局部边界跃升 + 暗核致密度，压低锁在眉毛上的大圈。
+        # 默认权重 0 时分数与历史一致；调高即启用。
+        local_edge = (
+            _local_edge_support(luminance, cx, cy, radius, local_edge_min_step)
+            if local_edge_weight
+            else 0.0
+        )
+        compact = (
+            _dark_core_compactness(luminance, cx, cy, radius)
+            if compactness_weight
+            else 0.0
+        )
+
         darkness = 1.0 - min(inside / 255.0, 1.0)
         dist_norm = ((cx - img_cx) ** 2 + (cy - img_cy) ** 2) ** 0.5 / max(sw, sh)
         score = (
             min(contrast / 80.0, 1.0) * 2.2
             + support * 1.2
             + darkness * 0.8
-            + sclera * 0.8
-            + bilateral * 0.8
+            + sclera * sclera_global_weight
+            + bilateral * bilateral_weight
+            + local_edge * local_edge_weight
+            + compact * compactness_weight
             - dist_norm * 0.5
         )
         if score > best_score:

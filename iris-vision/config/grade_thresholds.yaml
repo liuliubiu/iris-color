@@ -59,10 +59,32 @@ eye_closeup:
     inner_iris_ratio: 0.40      # 环带内缘（扣掉瞳孔）
     outer_iris_ratio: 0.85      # 环带外缘（留在虹膜中段）
 
+    # 多证据联合打分（B 方案，与巩膜证据正交）：局部边界跃升、暗核致密度。
+    # 实测：调高 local_edge_weight 既修不了 WechatIMG1026（其真实虹膜太小，
+    # 不在 Hough 候选集内——属方案 A 范畴），又会扰动 IMG_* 大图取色，故默认关闭（=历史行为）。
+    # 函数与配置钩子保留，供方案 A（接入眼/虹膜模型给出候选）复用或后续标定。
+    sclera_global_weight: 0.8   # 360° 偏白巩膜占比权重
+    bilateral_weight: 0.8       # 双侧（水平）巩膜占比权重
+    local_edge_weight: 0.0      # 局部边界亮度跃升占比权重（0=关闭）
+    local_edge_min_step: 12.0   # 判定一处「边」所需的内外亮度跃升
+    compactness_weight: 0.0     # 暗核居中致密度权重（0=关闭）
+
 # 全脸模式环带比例（相对 iris landmark 半径，仅 mode=face/auto 时使用）
 iris_ring:
   inner_ratio: 0.30
   outer_ratio: 0.80
+
+# 基础颜色分类（CIELAB）。min_chroma 之外的阈值与代码默认一致，列出便于标定。
+color_classification:
+  light_blue_l_min: 55.0
+  blue_b_max: -8.0
+  green_a_max: -3.0
+  green_b_min: -5.0
+  green_b_max: 35.0
+  dark_brown_l_max: 19.0
+  # 最小色度 sqrt(a*^2+b*^2)：低于此视为近中性，不判 green/blue（拦截反光/肤色混入
+  # 造成的假绿/假蓝，如 IMG_* 反光青绿色偏 color≈4）。真彩色虹膜色度远高于此。
+  min_chroma: 6.5
 
 quality:
   blur_threshold: 15.0
