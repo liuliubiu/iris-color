@@ -14,6 +14,8 @@ const canvasRef = ref<HTMLCanvasElement | null>(null)
 const adjustCanvasRef = ref<HTMLCanvasElement | null>(null)
 const cropCanvasRef = ref<HTMLCanvasElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
+const resultCardRef = ref<HTMLElement | null>(null)
+const diagnosisRef = ref<HTMLElement | null>(null)
 
 const cameraActive = ref(false)
 const previewUrl = ref<string | null>(null)
@@ -347,6 +349,20 @@ async function reanalyze() {
   await uploadFile(file)
 }
 
+function scrollResultIntoView(target: 'card' | 'diagnosis' = 'card') {
+  // 仅在窄屏（结果卡片堆叠在采集卡片下方）时自动滚动
+  if (typeof window === 'undefined') return
+  if (!window.matchMedia?.('(max-width: 980px)').matches) return
+  nextTick(() => {
+    if (target === 'diagnosis' && diagnosisRef.value) {
+      // 让「虹膜颜色 + 颜色等级」诊断区居中显示
+      diagnosisRef.value.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    } else {
+      resultCardRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  })
+}
+
 async function uploadFile(file: File) {
   loading.value = true
   result.value = null
@@ -355,15 +371,19 @@ async function uploadFile(file: File) {
   manualMode.value = false
   manualParams.value = null
   adjustImage = null
+  scrollResultIntoView()
 
   try {
     const data = await analyzeIris(file, skipQuality.value, detectMode.value)
     if (data.success === false) {
       errorMsg.value = data.error || '分析失败'
+      scrollResultIntoView('card')
     } else {
       result.value = data
       initManualParams(data)
       manualMode.value = false
+      // 结果渲染后卡片高度变化，重新滚动让诊断区居中显示
+      scrollResultIntoView('diagnosis')
     }
   } catch (err: unknown) {
     if (axiosIsError(err) && err.response?.data) {
@@ -378,6 +398,7 @@ async function uploadFile(file: File) {
     } else {
       errorMsg.value = '请求失败，请确认 iris-api 与 iris-vision 已启动'
     }
+    scrollResultIntoView('card')
   } finally {
     loading.value = false
   }
@@ -839,7 +860,7 @@ onBeforeUnmount(() => {
         </div>
       </article>
 
-      <article class="clinical-card result-card">
+      <article ref="resultCardRef" class="clinical-card result-card">
         <header class="card-header">
           <div>
             <span class="section-kicker">Step 02</span>
@@ -856,7 +877,7 @@ onBeforeUnmount(() => {
         <el-alert v-else-if="errorMsg" type="error" :title="errorMsg" show-icon />
 
         <div v-else-if="result" class="result-panel">
-          <div class="diagnosis-summary">
+          <div ref="diagnosisRef" class="diagnosis-summary">
             <div class="color-display">
               <span>虹膜颜色</span>
               <strong>{{ result.iris_color?.label ?? '未知' }}</strong>
@@ -1021,6 +1042,11 @@ onBeforeUnmount(() => {
   border-radius: 24px;
   background: rgba(255, 255, 255, 0.94);
   box-shadow: 0 18px 52px rgba(36, 82, 118, 0.09);
+}
+
+.result-card {
+  /* 自动滚动到结果时顶部留出呼吸空间 */
+  scroll-margin-top: 12px;
 }
 
 .card-header {
@@ -1572,7 +1598,11 @@ onBeforeUnmount(() => {
     padding-right: 0;
   }
 
-  .capture-tips,
+  /* 移动端隐藏采集提示，节省纵向空间 */
+  .capture-tips {
+    display: none;
+  }
+
   .evidence-grid {
     grid-template-columns: 1fr;
   }
