@@ -353,6 +353,10 @@ def _detect_rough(
         local_edge_weight=disk_cfg.get("local_edge_weight", 0.0),
         local_edge_min_step=disk_cfg.get("local_edge_min_step", 12.0),
         compactness_weight=disk_cfg.get("compactness_weight", 0.0),
+        use_edge_ranking=disk_cfg.get("use_edge_ranking", True),
+        edge_min_radius_ratio=disk_cfg.get("edge_min_radius_ratio", 0.07),
+        edge_center_bias=disk_cfg.get("edge_center_bias", 6.0),
+        edge_hough_param2=int(disk_cfg.get("edge_hough_param2", 16)),
     )
     if disk is None:
         return None

@@ -692,6 +692,122 @@ def _dark_core_compactness(
     return float(np.clip(centered * 0.5 + roundness * 0.3 + min(fill / 0.4, 1.0) * 0.2, 0.0, 1.0))
 
 
+def _circle_edge_strength(
+    luminance: np.ndarray,
+    cx: float,
+    cy: float,
+    r: float,
+    cos_a: np.ndarray,
+    sin_a: np.ndarray,
+) -> float:
+    """圆周「紧邻外侧 - 紧邻内侧」平均亮度（Daugman 角向积分的径向导数近似）。
+
+    真实虹膜/瞳孔边界处处是亮度跃变；锁在眉毛/皮肤上的大圈只有局部弧段有边，均值低。
+    实测此量能把 1026/IMG_* 的真实眼/虹膜在全部候选里排到第 1（而旧的硬对比门槛会
+    误杀「深虹膜被深眼睑包围」这种低对比真虹膜）。
+    """
+    v_in = _sample_luminance_at(luminance, cx + cos_a * r * 0.88, cy + sin_a * r * 0.88)
+    v_out = _sample_luminance_at(luminance, cx + cos_a * r * 1.14, cy + sin_a * r * 1.14)
+    return float(np.mean(v_out - v_in))
+
+
+def _refine_center_edge(
+    luminance: np.ndarray,
+    cx: float,
+    cy: float,
+    r0: float,
+    cos_a: np.ndarray,
+    sin_a: np.ndarray,
+) -> Tuple[float, float]:
+    """种子中心邻域内微调，最大化多半径圆周边界强度之和（锁定同心圆心）。"""
+    h, w = luminance.shape[:2]
+    span = max(r0 * 0.3, 6.0)
+    step = max(span / 6.0, 1.5)
+    radii = (r0 * 0.7, r0, r0 * 1.3)
+    best = (float(cx), float(cy))
+    best_s = -1e9
+    for ddx in np.arange(-span, span + 1, step):
+        for ddy in np.arange(-span, span + 1, step):
+            ncx, ncy = cx + ddx, cy + ddy
+            if ncx < 0 or ncx >= w or ncy < 0 or ncy >= h:
+                continue
+            s = sum(_circle_edge_strength(luminance, ncx, ncy, r, cos_a, sin_a) for r in radii)
+            if s > best_s:
+                best_s = s
+                best = (float(ncx), float(ncy))
+    return best
+
+
+def _find_profile_peaks(rs: np.ndarray, prof: np.ndarray, min_strength: float) -> list:
+    """径向边界强度剖面上的局部极大（峰），返回 [(r, strength), ...] 按 r 升序。"""
+    peaks = []
+    for i in range(1, len(prof) - 1):
+        if prof[i] >= prof[i - 1] and prof[i] > prof[i + 1] and prof[i] >= min_strength:
+            peaks.append((float(rs[i]), float(prof[i])))
+    return peaks
+
+
+def _select_iris_by_edge(
+    luminance: np.ndarray,
+    candidates,
+    sw: int,
+    sh: int,
+    min_r: int,
+    max_r: int,
+    center_bias: float = 6.0,
+    peak_min_strength: float = 7.0,
+) -> Optional[Tuple[float, float, float, Optional[float], float]]:
+    """边界强度选中心 + 径向剖面分离瞳孔/虹膜缘（方案 A 核心）。
+
+    返回 (cx, cy, iris_r, pupil_r_or_None, edge_strength_at_iris)，坐标在降采样空间。
+    1) 选圆周边界最强的候选作中心种子（无硬门槛，仅轻微居中偏好，避免锁到边角强纹理）；
+    2) 邻域微调中心；
+    3) 沿半径算边界强度剖面：最强峰若另有「明显更大且够强」的外峰，则该外峰=虹膜缘、强峰=瞳孔；
+       否则强峰本身=虹膜缘，更内的显著峰=瞳孔。
+    """
+    ang = np.linspace(0, 2 * np.pi, 48, endpoint=False)
+    cos_a, sin_a = np.cos(ang), np.sin(ang)
+    img_cx, img_cy = sw / 2.0, sh / 2.0
+    diag = float(max(sw, sh))
+
+    seed = None
+    seed_score = -1e9
+    for cx, cy, r in candidates:
+        s = _circle_edge_strength(luminance, cx, cy, r, cos_a, sin_a)
+        dist = ((cx - img_cx) ** 2 + (cy - img_cy) ** 2) ** 0.5 / diag
+        s_adj = s - dist * center_bias
+        if s_adj > seed_score:
+            seed_score = s_adj
+            seed = (cx, cy, r)
+    if seed is None:
+        return None
+
+    cx, cy, r0 = seed
+    cx, cy = _refine_center_edge(luminance, cx, cy, r0, cos_a, sin_a)
+
+    rs = np.arange(max(min_r * 0.6, 6.0), float(max_r), max(1.0, (max_r - min_r) / 140.0))
+    prof = _smooth_profile(
+        np.array([_circle_edge_strength(luminance, cx, cy, r, cos_a, sin_a) for r in rs]), 5
+    )
+    peaks = _find_profile_peaks(rs, prof, peak_min_strength)
+    if not peaks:
+        iris_r = r0
+        pupil_r = None
+    else:
+        strongest = max(peaks, key=lambda p: p[1])
+        outer = [p for p in peaks if p[0] >= strongest[0] * 1.4 and p[1] >= max(10.0, strongest[1] * 0.30)]
+        if outer:
+            iris_r = max(outer, key=lambda p: p[1])[0]
+            pupil_r = strongest[0]
+        else:
+            iris_r = strongest[0]
+            inner = [p for p in peaks if p[0] <= iris_r * 0.65 and p[1] >= 10.0]
+            pupil_r = min(inner, key=lambda p: p[0])[0] if inner else None
+
+    edge_iris = _circle_edge_strength(luminance, cx, cy, iris_r, cos_a, sin_a)
+    return float(cx), float(cy), float(iris_r), pupil_r, edge_iris
+
+
 def detect_iris_disk(
     image_bgr: np.ndarray,
     dark_percentile: float = 35.0,
@@ -711,6 +827,10 @@ def detect_iris_disk(
     local_edge_weight: float = 0.0,
     local_edge_min_step: float = 12.0,
     compactness_weight: float = 0.0,
+    use_edge_ranking: bool = True,
+    edge_min_radius_ratio: float = 0.07,
+    edge_center_bias: float = 6.0,
+    edge_hough_param2: int = 16,
 ) -> Optional[IrisDiskEstimate]:
     """
     黑盘直检：直接用 Hough 找虹膜/巩膜的圆形边界，再用「内暗外亮」验证。
@@ -738,18 +858,22 @@ def detect_iris_disk(
     max_r = max(int(s_min_dim * max_radius_ratio), min_r + 1)
     blurred = cv2.medianBlur(luminance, 5)
 
-    # 多阈值收集候选并去重：严阈值给强边界，松阈值补遮挡/弱边界
-    # 强阈值（param2=30）一旦给出足够候选就提前短路，省掉松阈值扫描
+    # 候选半径下限：边界排序模式放宽（让偏小的真实虹膜/瞳孔也进候选），旧模式用 min_r
+    hough_min_r = max(int(s_min_dim * edge_min_radius_ratio), 6) if use_edge_ranking else min_r
+
+    # 旧打分模式多档短路；边界排序模式只跑单档（HoughCircles 每次约 2s，多档会拖到 8-9s）。
+    # 单档用较低 param2 一次拿到强+弱候选（含 1026 这种低对比真虹膜），由边界强度再排序。
+    param2_levels = (edge_hough_param2,) if use_edge_ranking else (30, 22, 16)
     candidates: dict = {}
-    for param2 in (30, 22, 16):
+    for param2 in param2_levels:
         circles = cv2.HoughCircles(
             blurred,
             cv2.HOUGH_GRADIENT,
             dp=1.2,
-            minDist=min_r,
+            minDist=hough_min_r,
             param1=50,
             param2=param2,
-            minRadius=min_r,
+            minRadius=hough_min_r,
             maxRadius=max_r,
         )
         if circles is not None:
@@ -757,10 +881,40 @@ def detect_iris_disk(
                 cx, cy, radius = float(circle[0]), float(circle[1]), float(circle[2])
                 key = (round(cx / 12), round(cy / 12), round(radius / 12))
                 candidates.setdefault(key, (cx, cy, radius))
-        if len(candidates) >= 2:
+        if not use_edge_ranking and len(candidates) >= 2:
             break
     if not candidates:
         return None
+
+    # 方案 A：Daugman 式圆周边界强度选中心 + 径向剖面定虹膜缘（解决眉毛/皮肤脱靶误检）
+    if use_edge_ranking:
+        picked = _select_iris_by_edge(
+            luminance, list(candidates.values()), sw, sh, min_r, max_r,
+            center_bias=edge_center_bias,
+        )
+        if picked is None:
+            return None
+        cx, cy, iris_r, pupil_seed, edge_strength = picked
+        if pupil_seed is not None and pupil_seed > 0:
+            pupil_r, estimated = float(pupil_seed), False
+        else:
+            pupil_r, estimated = _estimate_pupil_in_disk(luminance, cx, cy, iris_r, pupil_iris_ratio)
+        inv = 1.0 / scale
+        cx_full, cy_full = cx * inv, cy * inv
+        iris_r_full, pupil_r_full = iris_r * inv, pupil_r * inv
+        confidence = float(np.clip(0.30 + edge_strength / 70.0, 0.30, 0.95))
+        candidate_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.circle(candidate_mask, (int(cx_full), int(cy_full)), int(iris_r_full), 255, 2)
+        return IrisDiskEstimate(
+            center_x=int(cx_full),
+            center_y=int(cy_full),
+            iris_radius=float(iris_r_full),
+            pupil_radius=float(pupil_r_full),
+            confidence=confidence,
+            method="iris_disk_edge",
+            pupil_estimated=estimated,
+            candidate_mask=candidate_mask,
+        )
 
     img_cx, img_cy = sw / 2.0, sh / 2.0
     best = None

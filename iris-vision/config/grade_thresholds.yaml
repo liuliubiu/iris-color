@@ -59,10 +59,15 @@ eye_closeup:
     inner_iris_ratio: 0.40      # 环带内缘（扣掉瞳孔）
     outer_iris_ratio: 0.85      # 环带外缘（留在虹膜中段）
 
-    # 多证据联合打分（B 方案，与巩膜证据正交）：局部边界跃升、暗核致密度。
-    # 实测：调高 local_edge_weight 既修不了 WechatIMG1026（其真实虹膜太小，
-    # 不在 Hough 候选集内——属方案 A 范畴），又会扰动 IMG_* 大图取色，故默认关闭（=历史行为）。
-    # 函数与配置钩子保留，供方案 A（接入眼/虹膜模型给出候选）复用或后续标定。
+    # 方案 A：Daugman 式圆周边界强度排序定位（默认开启）。
+    # 用「圆周外亮于内的平均跃变」选中心 + 径向剖面分离瞳孔/虹膜缘，去掉旧的硬对比/巩膜门槛。
+    # 实测能修复 WechatIMG1026、IMG_*（眉毛/皮肤脱靶）等几何误检。关掉则回退旧多证据打分。
+    use_edge_ranking: true
+    edge_min_radius_ratio: 0.07  # 边界模式 Hough 候选半径下限（放宽以纳入偏小的真实虹膜）
+    edge_center_bias: 6.0        # 选中心时的居中偏好（越大越偏向画面中心，抑制边角强纹理）
+    edge_hough_param2: 16        # 边界模式单档 Hough 阈值（越低候选越多越慢；只跑一档以控耗时）
+
+    # 旧多证据联合打分（use_edge_ranking=false 时生效）：局部边界跃升、暗核致密度。
     sclera_global_weight: 0.8   # 360° 偏白巩膜占比权重
     bilateral_weight: 0.8       # 双侧（水平）巩膜占比权重
     local_edge_weight: 0.0      # 局部边界亮度跃升占比权重（0=关闭）
