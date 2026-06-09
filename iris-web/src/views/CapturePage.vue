@@ -68,6 +68,215 @@ const gradeLabels: Record<number, string> = {
   5: '最深',
 }
 
+function roundRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const r = Math.min(radius, width / 2, height / 2)
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.arcTo(x + width, y, x + width, y + height, r)
+  ctx.arcTo(x + width, y + height, x, y + height, r)
+  ctx.arcTo(x, y + height, x, y, r)
+  ctx.arcTo(x, y, x + width, y, r)
+  ctx.closePath()
+}
+
+function loadReportEyeImage(): Promise<HTMLImageElement | null> {
+  const url = previewUrl.value
+  if (!url) return Promise.resolve(null)
+  return new Promise((resolve) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => resolve(null)
+    image.src = url
+  })
+}
+
+function drawClippedImage(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  ctx.save()
+  roundRectPath(ctx, x, y, width, height, radius)
+  ctx.clip()
+  ctx.drawImage(image, x, y, width, height)
+  ctx.restore()
+  roundRectPath(ctx, x, y, width, height, radius)
+  ctx.strokeStyle = '#dceaf2'
+  ctx.lineWidth = 1
+  ctx.stroke()
+}
+
+async function downloadResultReport() {
+  if (!result.value) return
+
+  const data = result.value
+  const colorLabel = data.iris_color?.label ?? '未知'
+  const grade = data.grade ?? '-'
+  const gradeNote = gradeLabels[data.grade ?? 0] ?? '待判定'
+  const labL = data.lab?.L?.toFixed(2) ?? '-'
+  const labA = data.lab?.a?.toFixed(2) ?? '-'
+  const labB = data.lab?.b?.toFixed(2) ?? '-'
+  const eyeImage = await loadReportEyeImage()
+
+  const width = 760
+  const scale = 2
+  const cardX = 36
+  const cardPadTop = 32
+  const cardPadBottom = 40
+  const headerH = 88
+  const blockX = 60
+  const blockW = width - 120
+  const sectionGap = 14
+  const colorBlockH = 92
+  const gradeBlockH = 112
+  const metricBlockH = 88
+
+  let eyeFrame: { x: number; y: number; w: number; h: number } | null = null
+  let yCursor = cardPadTop + headerH + sectionGap
+
+  if (eyeImage) {
+    const maxEyeW = blockW
+    const maxEyeH = 200
+    const fitScale = Math.min(maxEyeW / eyeImage.naturalWidth, maxEyeH / eyeImage.naturalHeight)
+    const drawW = eyeImage.naturalWidth * fitScale
+    const drawH = eyeImage.naturalHeight * fitScale
+    eyeFrame = {
+      x: blockX + (blockW - drawW) / 2,
+      y: yCursor,
+      w: drawW,
+      h: drawH,
+    }
+    yCursor += drawH + sectionGap
+  }
+
+  const colorY = yCursor
+  yCursor += colorBlockH + sectionGap
+  const gradeY = yCursor
+  yCursor += gradeBlockH + sectionGap
+  const metricY = yCursor
+  yCursor += metricBlockH
+  const cardHeight = yCursor - cardPadTop + cardPadBottom
+  const height = cardPadTop + cardHeight + 32
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width * scale
+  canvas.height = height * scale
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  ctx.scale(scale, scale)
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+
+  ctx.fillStyle = '#eef5f8'
+  ctx.fillRect(0, 0, width, height)
+
+  roundRectPath(ctx, cardX, cardPadTop, width - 72, cardHeight, 24)
+  ctx.fillStyle = '#ffffff'
+  ctx.fill()
+  ctx.strokeStyle = 'rgba(32, 112, 171, 0.14)'
+  ctx.lineWidth = 1
+  ctx.stroke()
+
+  roundRectPath(ctx, cardX, cardPadTop, width - 72, headerH, 24)
+  ctx.fillStyle = '#146c9c'
+  ctx.fill()
+  ctx.fillStyle = '#ffffff'
+  ctx.font = '600 13px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
+  ctx.fillText('IRIS COLOR ANALYSIS', blockX, cardPadTop + 30)
+  ctx.font = '700 24px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
+  ctx.fillText('虹膜颜色分析报告', blockX, cardPadTop + 66)
+
+  if (eyeImage && eyeFrame) {
+    drawClippedImage(ctx, eyeImage, eyeFrame.x, eyeFrame.y, eyeFrame.w, eyeFrame.h, 14)
+  }
+
+  roundRectPath(ctx, blockX, colorY, blockW, colorBlockH, 16)
+  ctx.fillStyle = '#f8fbfd'
+  ctx.fill()
+  ctx.strokeStyle = '#dceaf2'
+  ctx.stroke()
+  ctx.fillStyle = '#687d8f'
+  ctx.font = '600 13px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
+  ctx.textAlign = 'center'
+  ctx.fillText('虹膜颜色', blockX + blockW / 2, colorY + 30)
+  ctx.fillStyle = '#17324a'
+  ctx.font = '700 34px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
+  ctx.fillText(colorLabel, blockX + blockW / 2, colorY + 74)
+
+  roundRectPath(ctx, blockX, gradeY, blockW, gradeBlockH, 16)
+  ctx.fillStyle = '#f8fbfd'
+  ctx.fill()
+  ctx.strokeStyle = '#dceaf2'
+  ctx.stroke()
+  ctx.fillStyle = '#687d8f'
+  ctx.font = '600 13px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
+  ctx.fillText('颜色等级', blockX + blockW / 2, gradeY + 30)
+  ctx.fillStyle = '#146c9c'
+  ctx.font = '800 52px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
+  ctx.fillText(`Grade ${grade}`, blockX + blockW / 2, gradeY + 82)
+  const noteW = ctx.measureText(gradeNote).width + 28
+  const noteX = blockX + (blockW - noteW) / 2
+  roundRectPath(ctx, noteX, gradeY + 94, noteW, 28, 14)
+  ctx.fillStyle = '#eaf6fb'
+  ctx.fill()
+  ctx.fillStyle = '#23637f'
+  ctx.font = '700 14px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
+  ctx.fillText(gradeNote, blockX + blockW / 2, gradeY + 113)
+
+  const metricW = (blockW - 24) / 3
+  const metrics = [
+    { label: 'L* 明度', value: labL },
+    { label: 'a*', value: labA },
+    { label: 'b*', value: labB },
+  ]
+  metrics.forEach((item, index) => {
+    const x = blockX + index * (metricW + 12)
+    roundRectPath(ctx, x, metricY, metricW, metricBlockH, 14)
+    ctx.fillStyle = '#ffffff'
+    ctx.fill()
+    ctx.strokeStyle = '#dceaf2'
+    ctx.stroke()
+    ctx.fillStyle = '#687d8f'
+    ctx.font = '600 12px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
+    ctx.fillText(item.label, x + metricW / 2, metricY + 26)
+    ctx.fillStyle = '#17324a'
+    ctx.font = '700 28px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
+    ctx.fillText(item.value, x + metricW / 2, metricY + 66)
+  })
+
+  ctx.textAlign = 'left'
+  ctx.fillStyle = '#8aa3b5'
+  ctx.font = '500 11px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
+  const stamp = new Date().toLocaleString('zh-CN', { hour12: false })
+  ctx.fillText(`Generated ${stamp}`, blockX, cardPadTop + cardHeight - 18)
+
+  canvas.toBlob((blob) => {
+    if (!blob) {
+      ElMessage.error('报告生成失败，请重试')
+      return
+    }
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `iris-color-report-${Date.now()}.png`
+    link.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('分析报告已保存至本地')
+  }, 'image/png')
+}
+
 async function startCamera() {
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -930,7 +1139,19 @@ onBeforeUnmount(() => {
             <span class="section-kicker">Step 02</span>
             <h2>分析结果</h2>
           </div>
-          <el-tag effect="plain" type="primary">自动分级</el-tag>
+          <button
+            type="button"
+            class="download-report-btn"
+            :disabled="!result || loading"
+            aria-label="下载分析报告"
+            @click="downloadResultReport"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v12" />
+              <path d="M7 10l5 5 5-5" />
+              <path d="M5 21h14" />
+            </svg>
+          </button>
         </header>
 
         <div v-if="loading" class="result-loading">
@@ -1150,6 +1371,36 @@ onBeforeUnmount(() => {
   margin: 0;
   color: #1b3348;
   font-size: 22px;
+}
+
+.download-report-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #d6eaf3;
+  border-radius: 12px;
+  background: #f7fcff;
+  color: #146c9c;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease;
+}
+
+.download-report-btn:hover:not(:disabled) {
+  background: #eaf6fb;
+  color: #0f5a82;
+}
+
+.download-report-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.download-report-btn:disabled {
+  color: #a8b8c7;
+  background: #f6f9fb;
+  border-color: #e3edf3;
+  cursor: not-allowed;
 }
 
 .camera-box {
@@ -1445,6 +1696,7 @@ onBeforeUnmount(() => {
 
 .color-display {
   padding: 18px;
+  text-align: center;
 }
 
 .color-display span,
@@ -1461,6 +1713,7 @@ onBeforeUnmount(() => {
   margin-top: 8px;
   color: #17324a;
   font-size: 26px;
+  text-align: center;
 }
 
 .grade-display {
