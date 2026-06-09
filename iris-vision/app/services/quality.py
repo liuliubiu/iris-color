@@ -14,6 +14,21 @@ _RIGHT_EYE_TOP = 386
 _RIGHT_EYE_BOTTOM = 374
 
 
+QUALITY_ISSUE_MESSAGES: dict[str, str] = {
+    "image_too_blurry": "图像模糊，请重新对焦拍摄",
+    "image_overexposed": "图像过曝，请避免强光直射",
+    "eye_closed": "未检测到睁眼，请确保眼睛睁开",
+}
+
+
+def format_quality_failure_message(issues: List[str]) -> str:
+    """将质量问题代码转为用户可读提示。"""
+    parts = [QUALITY_ISSUE_MESSAGES.get(code, code) for code in issues]
+    if not parts:
+        return "图像质量未达标，请重新拍摄更清晰的眼部特写"
+    return "图像质量未达标：" + "；".join(parts)
+
+
 @dataclass
 class QualityResult:
     """质量检测结果。"""

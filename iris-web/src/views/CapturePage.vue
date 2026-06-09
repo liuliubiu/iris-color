@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import {
   analyzeIris,
   analyzeIrisManual,
+  parseAnalysisError,
   type AnalysisResult,
   type DetectionInfo,
 } from '../api/iris'
@@ -14,6 +15,7 @@ const adjustCanvasRef = ref<HTMLCanvasElement | null>(null)
 const cropCanvasRef = ref<HTMLCanvasElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const resultCardRef = ref<HTMLElement | null>(null)
+const captureCardRef = ref<HTMLElement | null>(null)
 const diagnosisRef = ref<HTMLElement | null>(null)
 
 const cameraActive = ref(false)
@@ -23,6 +25,7 @@ const loading = ref(false)
 const manualLoading = ref(false)
 const result = ref<AnalysisResult | null>(null)
 const errorMsg = ref('')
+const qualityCheckFailed = ref(false)
 const currentFile = ref<File | null>(null)
 const originalFile = ref<File | null>(null)
 const manualMode = ref(false)
@@ -122,6 +125,7 @@ function onFileSelected(event: Event) {
 function enterCropMode(file: File) {
   result.value = null
   errorMsg.value = ''
+  qualityCheckFailed.value = false
   manualMode.value = false
   manualParams.value = null
   adjustImage = null
@@ -331,6 +335,7 @@ function reenterCropMode() {
   if (!originalFile.value || !originalPreviewUrl.value) return
   result.value = null
   errorMsg.value = ''
+  qualityCheckFailed.value = false
   manualMode.value = false
   manualParams.value = null
   adjustImage = null
@@ -339,13 +344,24 @@ function reenterCropMode() {
   }
   previewUrl.value = originalPreviewUrl.value
   cropMode.value = true
-  nextTick(loadCropCanvas)
+  nextTick(() => {
+    loadCropCanvas()
+    scrollCaptureIntoView()
+  })
 }
 
 async function reanalyze() {
   const file = currentFile.value
   if (!file) return
   await uploadFile(file)
+}
+
+function scrollCaptureIntoView() {
+  if (typeof window === 'undefined') return
+  if (!window.matchMedia?.('(max-width: 980px)').matches) return
+  nextTick(() => {
+    captureCardRef.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  })
 }
 
 function scrollResultIntoView(target: 'card' | 'diagnosis' = 'card') {
@@ -362,10 +378,23 @@ function scrollResultIntoView(target: 'card' | 'diagnosis' = 'card') {
   })
 }
 
+function applyAnalysisError(data: unknown) {
+  const parsed = parseAnalysisError(data)
+  errorMsg.value = parsed.message
+  qualityCheckFailed.value = parsed.qualityCheckFailed
+}
+
+async function skipQualityAndReanalyze() {
+  skipQuality.value = true
+  qualityCheckFailed.value = false
+  await reanalyze()
+}
+
 async function uploadFile(file: File) {
   loading.value = true
   result.value = null
   errorMsg.value = ''
+  qualityCheckFailed.value = false
   currentFile.value = file
   manualMode.value = false
   manualParams.value = null
@@ -375,7 +404,7 @@ async function uploadFile(file: File) {
   try {
     const data = await analyzeIris(file, skipQuality.value)
     if (data.success === false) {
-      errorMsg.value = data.error || '分析失败'
+      applyAnalysisError(data)
       scrollResultIntoView('card')
     } else {
       result.value = data
@@ -386,16 +415,10 @@ async function uploadFile(file: File) {
     }
   } catch (err: unknown) {
     if (axiosIsError(err) && err.response?.data) {
-      const detail = err.response.data as AnalysisResult & { detail?: unknown }
-      errorMsg.value =
-        detail.error ||
-        (detail.detail === 'no_iris_detected'
-          ? '未识别到虹膜，请使用单眼特写（瞳孔居中、对焦清晰）'
-          : typeof detail.detail === 'string'
-            ? detail.detail
-            : JSON.stringify(detail.detail ?? detail))
+      applyAnalysisError(err.response.data)
     } else {
       errorMsg.value = '请求失败，请确认 iris-api 与 iris-vision 已启动'
+      qualityCheckFailed.value = false
     }
     scrollResultIntoView('card')
   } finally {
@@ -413,6 +436,7 @@ function startManualAdjust() {
   manualMode.value = true
   nextTick(() => {
     loadAdjustCanvas()
+    scrollCaptureIntoView()
   })
 }
 
@@ -425,6 +449,7 @@ function clearPreview() {
   manualParams.value = null
   adjustImage = null
   cropImage = null
+  qualityCheckFailed.value = false
 }
 
 function loadAdjustCanvas() {
@@ -617,10 +642,11 @@ async function analyzeWithManualParams() {
   if (!currentFile.value || !manualParams.value) return
   manualLoading.value = true
   errorMsg.value = ''
+  qualityCheckFailed.value = false
   try {
     const data = await analyzeIrisManual(currentFile.value, manualParams.value, skipQuality.value)
     if (data.success === false) {
-      errorMsg.value = data.error || '人工调整分析失败'
+      applyAnalysisError(data)
     } else {
       result.value = data
       initManualParams(data)
@@ -629,10 +655,10 @@ async function analyzeWithManualParams() {
     }
   } catch (err: unknown) {
     if (axiosIsError(err) && err.response?.data) {
-      const detail = err.response.data as AnalysisResult & { detail?: unknown }
-      errorMsg.value = detail.error || JSON.stringify(detail.detail ?? detail)
+      applyAnalysisError(err.response.data)
     } else {
       errorMsg.value = '人工调整分析请求失败'
+      qualityCheckFailed.value = false
     }
   } finally {
     manualLoading.value = false
@@ -691,7 +717,7 @@ onBeforeUnmount(() => {
     <div v-if="settingsOpen" class="mobile-settings-backdrop" @click="settingsOpen = false"></div>
 
     <section class="workflow-grid">
-      <article class="clinical-card capture-card">
+      <article ref="captureCardRef" class="clinical-card capture-card">
         <header class="card-header">
           <div>
             <span class="section-kicker">Step 01</span>
@@ -889,7 +915,18 @@ onBeforeUnmount(() => {
           <span>正在分析虹膜颜色，请稍候...</span>
         </div>
 
-        <el-alert v-else-if="errorMsg" type="error" :title="errorMsg" show-icon />
+        <div v-else-if="errorMsg" class="error-panel">
+          <el-alert type="error" :title="errorMsg" show-icon :closable="false" />
+          <el-button
+            v-if="qualityCheckFailed"
+            type="warning"
+            class="skip-quality-btn"
+            :loading="loading"
+            @click="skipQualityAndReanalyze"
+          >
+            跳过质量检测并重新识别
+          </el-button>
+        </div>
 
         <div v-else-if="result" class="result-panel">
           <div ref="diagnosisRef" class="diagnosis-summary">
@@ -1193,6 +1230,16 @@ onBeforeUnmount(() => {
 
 .quality-toggle {
   min-height: 40px;
+}
+
+.error-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.skip-quality-btn {
+  align-self: flex-start;
 }
 
 .manual-panel {
@@ -1513,6 +1560,10 @@ onBeforeUnmount(() => {
 
   .camera-box {
     min-height: 300px;
+  }
+
+  .skip-quality-btn {
+    width: 100%;
   }
 }
 

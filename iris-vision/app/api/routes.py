@@ -19,6 +19,7 @@ from app.models.schemas import (
 )
 from app.services.debug_viz import build_debug_images, images_to_base64
 from app.services.pipeline import AnalysisError, load_config, run_analysis
+from app.services.quality import format_quality_failure_message
 
 router = APIRouter()
 
@@ -111,6 +112,7 @@ def _raise_analysis_error(exc: AnalysisError) -> None:
             detail={
                 "success": False,
                 "error": exc.code,
+                "message": format_quality_failure_message(exc.quality.issues),
                 "quality": {
                     "blur_score": exc.quality.blur_score,
                     "overexposed_ratio": exc.quality.overexposed_ratio,
@@ -121,7 +123,15 @@ def _raise_analysis_error(exc: AnalysisError) -> None:
             },
         ) from exc
     status = 400 if exc.code == "no_iris_detected" else 422
-    raise HTTPException(status_code=status, detail=exc.code) from exc
+    message = (
+        "未识别到虹膜，请使用单眼特写（瞳孔居中、对焦清晰）"
+        if exc.code == "no_iris_detected"
+        else exc.code
+    )
+    raise HTTPException(
+        status_code=status,
+        detail={"success": False, "error": exc.code, "message": message},
+    ) from exc
 
 
 @router.get("/health", response_model=HealthResponse)
