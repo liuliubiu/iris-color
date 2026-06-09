@@ -650,8 +650,9 @@ async function analyzeWithManualParams() {
     } else {
       result.value = data
       initManualParams(data)
+      manualMode.value = false
       ElMessage.success('已按人工调整区域重新识别')
-      nextTick(drawAdjustCanvas)
+      scrollResultIntoView('diagnosis')
     }
   } catch (err: unknown) {
     if (axiosIsError(err) && err.response?.data) {
@@ -717,7 +718,11 @@ onBeforeUnmount(() => {
     <div v-if="settingsOpen" class="mobile-settings-backdrop" @click="settingsOpen = false"></div>
 
     <section class="workflow-grid">
-      <article ref="captureCardRef" class="clinical-card capture-card">
+      <article
+        ref="captureCardRef"
+        class="clinical-card capture-card"
+        :class="{ 'manual-mode-active': manualMode }"
+      >
         <header class="card-header">
           <div>
             <span class="section-kicker">Step 01</span>
@@ -793,7 +798,7 @@ onBeforeUnmount(() => {
               </el-button>
               <el-button size="large" @click="fileInputRef?.click()">选择文件</el-button>
             </div>
-            <div v-if="previewUrl" class="action-row action-row--secondary">
+            <div v-if="previewUrl && !manualMode" class="action-row action-row--secondary">
               <el-button
                 v-if="currentFile && previewUrl"
                 size="large"
@@ -817,6 +822,19 @@ onBeforeUnmount(() => {
                 人工校准
               </el-button>
               <el-button size="large" @click="clearPreview">清除预览</el-button>
+            </div>
+            <div
+              v-if="previewUrl && manualMode && manualParams"
+              class="action-row action-row--manual-mobile"
+            >
+              <el-button
+                type="primary"
+                size="large"
+                :loading="manualLoading"
+                @click="analyzeWithManualParams"
+              >
+                按校准区域重新识别
+              </el-button>
             </div>
             <div class="action-settings">
               <el-checkbox v-model="skipQuality" class="quality-toggle">
@@ -880,7 +898,12 @@ onBeforeUnmount(() => {
               />
             </label>
           </div>
-          <el-button type="primary" :loading="manualLoading" @click="analyzeWithManualParams">
+          <el-button
+            class="manual-submit-btn"
+            type="primary"
+            :loading="manualLoading"
+            @click="analyzeWithManualParams"
+          >
             按校准区域重新识别
           </el-button>
         </div>
@@ -1215,6 +1238,10 @@ onBeforeUnmount(() => {
 
 .action-row :deep(.el-button) {
   margin-left: 0;
+}
+
+.action-row--manual-mobile {
+  display: none;
 }
 
 .action-settings {
@@ -1804,6 +1831,33 @@ onBeforeUnmount(() => {
   .action-row--secondary :deep(.el-button.is-disabled) {
     color: #a7b8c5;
     background: #f6f9fb;
+  }
+
+  .action-row--manual-mobile {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    margin: 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(32, 112, 171, 0.1);
+  }
+
+  .action-row--manual-mobile :deep(.el-button) {
+    width: 100%;
+    min-height: 50px;
+    margin-left: 0;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    transition: transform 0.12s ease;
+  }
+
+  .capture-card.manual-mode-active .action-row--primary {
+    display: none;
+  }
+
+  .manual-panel .manual-submit-btn {
+    display: none;
   }
 
   /* 触控按压反馈，营造原生点击手感 */
