@@ -6,7 +6,6 @@ import {
   analyzeIrisManual,
   type AnalysisResult,
   type DetectionInfo,
-  type DetectMode,
 } from '../api/iris'
 
 const videoRef = ref<HTMLVideoElement | null>(null)
@@ -32,7 +31,6 @@ const manualParams = ref<DetectionInfo | null>(null)
 const adjustCursor = ref('default')
 const cropCursor = ref('crosshair')
 const skipQuality = ref(false)
-const detectMode = ref<DetectMode>('auto')
 const settingsOpen = ref(false)
 const isCoarsePointer =
   typeof window !== 'undefined' &&
@@ -350,12 +348,6 @@ async function reanalyze() {
   await uploadFile(file)
 }
 
-function onModeChange() {
-  // 移动端从顶栏面板切换模式后收起面板，再重新识别
-  settingsOpen.value = false
-  reanalyze()
-}
-
 function scrollResultIntoView(target: 'card' | 'diagnosis' = 'card') {
   // 仅在窄屏（结果卡片堆叠在采集卡片下方）时自动滚动
   if (typeof window === 'undefined') return
@@ -381,7 +373,7 @@ async function uploadFile(file: File) {
   scrollResultIntoView()
 
   try {
-    const data = await analyzeIris(file, skipQuality.value, detectMode.value)
+    const data = await analyzeIris(file, skipQuality.value)
     if (data.success === false) {
       errorMsg.value = data.error || '分析失败'
       scrollResultIntoView('card')
@@ -694,14 +686,6 @@ onBeforeUnmount(() => {
           <span class="settings-label">跳过质量检测</span>
           <el-switch v-model="skipQuality" />
         </div>
-        <div class="settings-row settings-row--column">
-          <span class="settings-label">识别模式</span>
-          <el-radio-group v-model="detectMode" size="small" @change="onModeChange">
-            <el-radio-button value="auto">自动</el-radio-button>
-            <el-radio-button value="precise">清晰精定位</el-radio-button>
-            <el-radio-button value="rough">实拍粗略</el-radio-button>
-          </el-radio-group>
-        </div>
       </div>
     </transition>
     <div v-if="settingsOpen" class="mobile-settings-backdrop" @click="settingsOpen = false"></div>
@@ -812,14 +796,6 @@ onBeforeUnmount(() => {
               <el-checkbox v-model="skipQuality" class="quality-toggle">
                 跳过质量检测
               </el-checkbox>
-              <div class="mode-toggle">
-                <span class="mode-label">识别模式</span>
-                <el-radio-group v-model="detectMode" size="small" @change="reanalyze">
-                  <el-radio-button value="auto">自动</el-radio-button>
-                  <el-radio-button value="precise">清晰精定位</el-radio-button>
-                  <el-radio-button value="rough">实拍粗略</el-radio-button>
-                </el-radio-group>
-              </div>
             </div>
           </template>
         </div>
@@ -1217,19 +1193,6 @@ onBeforeUnmount(() => {
 
 .quality-toggle {
   min-height: 40px;
-}
-
-.mode-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 40px;
-}
-
-.mode-label {
-  font-size: 14px;
-  white-space: nowrap;
-  color: var(--el-text-color-regular, #606266);
 }
 
 .manual-panel {
@@ -1718,31 +1681,10 @@ onBeforeUnmount(() => {
     gap: 12px;
   }
 
-  .settings-row--column {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 10px;
-  }
-
   .settings-label {
     color: #2b4256;
     font-size: 14px;
     font-weight: 600;
-  }
-
-  .mobile-settings-panel :deep(.el-radio-group) {
-    display: flex;
-    width: 100%;
-  }
-
-  .mobile-settings-panel :deep(.el-radio-button) {
-    flex: 1;
-  }
-
-  .mobile-settings-panel :deep(.el-radio-button__inner) {
-    width: 100%;
-    padding-left: 0;
-    padding-right: 0;
   }
 
   /* —— 底部固定操作栏：主操作 + 子操作 —— */
