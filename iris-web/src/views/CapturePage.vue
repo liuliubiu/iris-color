@@ -14,6 +14,7 @@ const canvasRef = ref<HTMLCanvasElement | null>(null)
 const adjustCanvasRef = ref<HTMLCanvasElement | null>(null)
 const cropCanvasRef = ref<HTMLCanvasElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
+const cameraInputRef = ref<HTMLInputElement | null>(null)
 const resultCardRef = ref<HTMLElement | null>(null)
 const captureCardRef = ref<HTMLElement | null>(null)
 const diagnosisRef = ref<HTMLElement | null>(null)
@@ -40,6 +41,8 @@ const isCoarsePointer =
   typeof window.matchMedia === 'function' &&
   window.matchMedia('(pointer: coarse)').matches
 const touchTolBoost = isCoarsePointer ? 1.8 : 1
+/** 手机端通过系统相机拍照，不在页内占用摄像头 */
+const useNativeCamera = isCoarsePointer
 
 interface CropRect {
   x: number
@@ -53,6 +56,11 @@ const cropRect = ref<CropRect>({ x: 0, y: 0, width: 0, height: 0 })
 let mediaStream: MediaStream | null = null
 let adjustImage: HTMLImageElement | null = null
 let cropImage: HTMLImageElement | null = null
+/** 框选交互画布相对原图缩放比（display = source * scale），导出裁剪时用 inverse 还原 */
+let cropDisplayScale = 1
+let cropBaseCanvas: HTMLCanvasElement | null = null
+let cropDrawRaf = 0
+const CROP_INTERACTIVE_MAX_DIM = 1280
 type DragMode = 'move' | 'pupil_radius' | 'inner_radius' | 'outer_radius'
 type CropDragMode = 'move' | 'nw' | 'ne' | 'sw' | 'se'
 let dragMode: DragMode | null = null
@@ -306,6 +314,11 @@ function stopCamera() {
 }
 
 function capturePhoto() {
+  if (useNativeCamera) {
+    cameraInputRef.value?.click()
+    return
+  }
+
   const video = videoRef.value
   const canvas = canvasRef.value
   if (!video || !canvas) return
@@ -340,6 +353,7 @@ function enterCropMode(file: File) {
   adjustImage = null
   currentFile.value = null
   cropImage = null
+  resetCropRenderCache()
 
   revokePreviewUrls()
   originalFile.value = file
@@ -360,6 +374,15 @@ function revokePreviewUrls() {
   }
 }
 
+function resetCropRenderCache() {
+  cropBaseCanvas = null
+  cropDisplayScale = 1
+  if (cropDrawRaf) {
+    cancelAnimationFrame(cropDrawRaf)
+    cropDrawRaf = 0
+  }
+}
+
 function defaultCropRect(width: number, height: number): CropRect {
   const size = Math.min(width, height) * 0.72
   return {
@@ -377,8 +400,22 @@ function loadCropCanvas() {
   const image = new Image()
   image.onload = () => {
     cropImage = image
-    canvas.width = image.naturalWidth
-    canvas.height = image.naturalHeight
+    resetCropRenderCache()
+
+    const maxDim = Math.max(image.naturalWidth, image.naturalHeight)
+    cropDisplayScale = maxDim > CROP_INTERACTIVE_MAX_DIM
+      ? CROP_INTERACTIVE_MAX_DIM / maxDim
+      : 1
+
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * cropDisplayScale))
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * cropDisplayScale))
+
+    cropBaseCanvas = document.createElement('canvas')
+    cropBaseCanvas.width = canvas.width
+    cropBaseCanvas.height = canvas.height
+    const baseCtx = cropBaseCanvas.getContext('2d')
+    baseCtx?.drawImage(image, 0, 0, canvas.width, canvas.height)
+
     cropRect.value = defaultCropRect(canvas.width, canvas.height)
     drawCropCanvas()
   }
@@ -399,6 +436,14 @@ function normalizeCropRect() {
   cropRect.value = { x, y, width, height }
 }
 
+function scheduleDrawCropCanvas() {
+  if (cropDrawRaf) return
+  cropDrawRaf = requestAnimationFrame(() => {
+    cropDrawRaf = 0
+    drawCropCanvas()
+  })
+}
+
 function drawCropCanvas() {
   const canvas = cropCanvasRef.value
   if (!canvas || !cropImage) return
@@ -407,7 +452,11 @@ function drawCropCanvas() {
   const r = cropRect.value
   const uiScale = canvasUiScale(cropCanvasRef.value)
   ctx.clearRect(0, 0, canvas.width, canvas.height)
-  ctx.drawImage(cropImage, 0, 0)
+  if (cropBaseCanvas) {
+    ctx.drawImage(cropBaseCanvas, 0, 0)
+  } else {
+    ctx.drawImage(cropImage, 0, 0, canvas.width, canvas.height)
+  }
   ctx.fillStyle = 'rgba(7, 21, 33, 0.58)'
   ctx.fillRect(0, 0, canvas.width, r.y)
   ctx.fillRect(0, r.y + r.height, canvas.width, canvas.height - r.y - r.height)
@@ -499,7 +548,7 @@ function onCropPointerMove(event: PointerEvent) {
   }
   cropRect.value = { x, y, width, height }
   normalizeCropRect()
-  drawCropCanvas()
+  scheduleDrawCropCanvas()
 }
 
 function onCropPointerEnd(event: PointerEvent) {
@@ -512,15 +561,17 @@ function onCropPointerEnd(event: PointerEvent) {
 
 async function applyCropAndAnalyze() {
   if (!cropImage) return
-  const { x, y, width, height } = cropRect.value
-  const w = Math.max(1, Math.round(width))
-  const h = Math.max(1, Math.round(height))
+  const inv = 1 / cropDisplayScale
+  const sx = Math.round(cropRect.value.x * inv)
+  const sy = Math.round(cropRect.value.y * inv)
+  const w = Math.max(1, Math.round(cropRect.value.width * inv))
+  const h = Math.max(1, Math.round(cropRect.value.height * inv))
   const canvas = document.createElement('canvas')
   canvas.width = w
   canvas.height = h
   const ctx = canvas.getContext('2d')
   if (!ctx) return
-  ctx.drawImage(cropImage, Math.round(x), Math.round(y), w, h, 0, 0, w, h)
+  ctx.drawImage(cropImage, sx, sy, w, h, 0, 0, w, h)
 
   const blob = await new Promise<Blob | null>((resolve) => {
     canvas.toBlob(resolve, 'image/jpeg', 0.92)
@@ -532,6 +583,7 @@ async function applyCropAndAnalyze() {
 
   cropMode.value = false
   cropImage = null
+  resetCropRenderCache()
   if (previewUrl.value && previewUrl.value !== originalPreviewUrl.value) {
     URL.revokeObjectURL(previewUrl.value)
   }
@@ -658,6 +710,7 @@ function clearPreview() {
   manualParams.value = null
   adjustImage = null
   cropImage = null
+  resetCropRenderCache()
   qualityCheckFailed.value = false
 }
 
@@ -880,11 +933,14 @@ function axiosIsError(err: unknown): err is { response?: { data?: unknown } } {
 }
 
 onMounted(() => {
-  startCamera()
+  if (!useNativeCamera) {
+    startCamera()
+  }
 })
 
 onBeforeUnmount(() => {
   stopCamera()
+  resetCropRenderCache()
   revokePreviewUrls()
 })
 </script>
@@ -898,8 +954,8 @@ onBeforeUnmount(() => {
       </div>
       <div class="hero-actions">
         <div class="hero-status">
-          <span class="status-dot" :class="{ active: cameraActive }"></span>
-          <span>{{ cameraActive ? '摄像头已就绪' : '摄像头未接入' }}</span>
+          <span class="status-dot" :class="{ active: useNativeCamera || cameraActive }"></span>
+          <span>{{ useNativeCamera ? '支持系统相机' : (cameraActive ? '摄像头已就绪' : '摄像头未接入') }}</span>
         </div>
         <button
           type="button"
@@ -979,7 +1035,7 @@ onBeforeUnmount(() => {
           />
           <div v-if="!cameraActive && !previewUrl && !manualMode && !cropMode" class="camera-placeholder">
             <div class="placeholder-icon">●</div>
-            <p>请开启摄像头或上传眼部图片</p>
+            <p>{{ useNativeCamera ? '请点击下方「拍照」调用系统相机，或选择已有图片' : '请开启摄像头或上传眼部图片' }}</p>
           </div>
           <canvas ref="canvasRef" class="hidden-canvas" />
         </div>
@@ -989,6 +1045,14 @@ onBeforeUnmount(() => {
             ref="fileInputRef"
             type="file"
             accept="image/*"
+            class="hidden-input"
+            @change="onFileSelected"
+          />
+          <input
+            ref="cameraInputRef"
+            type="file"
+            accept="image/*"
+            capture="environment"
             class="hidden-input"
             @change="onFileSelected"
           />
