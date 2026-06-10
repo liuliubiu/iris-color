@@ -14,7 +14,6 @@ const canvasRef = ref<HTMLCanvasElement | null>(null)
 const adjustCanvasRef = ref<HTMLCanvasElement | null>(null)
 const cropCanvasRef = ref<HTMLCanvasElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
-const cameraInputRef = ref<HTMLInputElement | null>(null)
 const resultCardRef = ref<HTMLElement | null>(null)
 const captureCardRef = ref<HTMLElement | null>(null)
 const diagnosisRef = ref<HTMLElement | null>(null)
@@ -41,8 +40,8 @@ const isCoarsePointer =
   typeof window.matchMedia === 'function' &&
   window.matchMedia('(pointer: coarse)').matches
 const touchTolBoost = isCoarsePointer ? 1.8 : 1
-/** 手机端通过系统相机拍照，不在页内占用摄像头 */
-const useNativeCamera = isCoarsePointer
+const cameraFacing = ref<'environment' | 'user'>('environment')
+const cameraSwitching = ref(false)
 
 interface CropRect {
   x: number
@@ -286,10 +285,11 @@ async function downloadResultReport() {
 }
 
 async function startCamera() {
+  stopCamera()
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
       video: {
-        facingMode: { ideal: 'environment' },
+        facingMode: { ideal: cameraFacing.value },
         width: { ideal: 1920 },
         height: { ideal: 1080 },
       },
@@ -305,6 +305,17 @@ async function startCamera() {
   }
 }
 
+async function switchCamera() {
+  if (cameraSwitching.value) return
+  cameraSwitching.value = true
+  cameraFacing.value = cameraFacing.value === 'environment' ? 'user' : 'environment'
+  try {
+    await startCamera()
+  } finally {
+    cameraSwitching.value = false
+  }
+}
+
 function stopCamera() {
   if (mediaStream) {
     mediaStream.getTracks().forEach((track) => track.stop())
@@ -314,11 +325,6 @@ function stopCamera() {
 }
 
 function capturePhoto() {
-  if (useNativeCamera) {
-    cameraInputRef.value?.click()
-    return
-  }
-
   const video = videoRef.value
   const canvas = canvasRef.value
   if (!video || !canvas) return
@@ -933,9 +939,7 @@ function axiosIsError(err: unknown): err is { response?: { data?: unknown } } {
 }
 
 onMounted(() => {
-  if (!useNativeCamera) {
-    startCamera()
-  }
+  startCamera()
 })
 
 onBeforeUnmount(() => {
@@ -954,8 +958,8 @@ onBeforeUnmount(() => {
       </div>
       <div class="hero-actions">
         <div class="hero-status">
-          <span class="status-dot" :class="{ active: useNativeCamera || cameraActive }"></span>
-          <span>{{ useNativeCamera ? '支持系统相机' : (cameraActive ? '摄像头已就绪' : '摄像头未接入') }}</span>
+          <span class="status-dot" :class="{ active: cameraActive }"></span>
+          <span>{{ cameraActive ? `摄像头已就绪（${cameraFacing === 'environment' ? '后摄' : '前摄'}）` : '摄像头未接入' }}</span>
         </div>
         <button
           type="button"
@@ -1033,9 +1037,25 @@ onBeforeUnmount(() => {
             @pointercancel="onAdjustPointerEnd"
             @pointerleave="adjustCursor = 'default'"
           />
+          <button
+            v-if="cameraActive && !previewUrl && !manualMode && !cropMode"
+            type="button"
+            class="camera-flip-btn"
+            :disabled="cameraSwitching"
+            :aria-label="cameraFacing === 'environment' ? '切换至前摄' : '切换至后摄'"
+            @click="switchCamera"
+          >
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 7h4l2-3h6l2 3h4" />
+              <rect x="3" y="7" width="18" height="13" rx="2" />
+              <path d="M12 11v4" />
+              <path d="M9.5 13.5 12 11l2.5 2.5" />
+            </svg>
+            <span>{{ cameraFacing === 'environment' ? '前摄' : '后摄' }}</span>
+          </button>
           <div v-if="!cameraActive && !previewUrl && !manualMode && !cropMode" class="camera-placeholder">
             <div class="placeholder-icon">●</div>
-            <p>{{ useNativeCamera ? '请点击下方「拍照」调用系统相机，或选择已有图片' : '请开启摄像头或上传眼部图片' }}</p>
+            <p>请开启摄像头或上传眼部图片</p>
           </div>
           <canvas ref="canvasRef" class="hidden-canvas" />
         </div>
@@ -1045,14 +1065,6 @@ onBeforeUnmount(() => {
             ref="fileInputRef"
             type="file"
             accept="image/*"
-            class="hidden-input"
-            @change="onFileSelected"
-          />
-          <input
-            ref="cameraInputRef"
-            type="file"
-            accept="image/*"
-            capture="environment"
             class="hidden-input"
             @change="onFileSelected"
           />
@@ -1491,6 +1503,39 @@ onBeforeUnmount(() => {
   content: '';
   border: 1px solid rgba(98, 202, 255, 0.22);
   border-radius: 18px;
+}
+
+.camera-flip-btn {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid rgba(98, 202, 255, 0.35);
+  border-radius: 999px;
+  background: rgba(7, 21, 33, 0.72);
+  color: #e8f6ff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: background 0.15s ease, transform 0.12s ease;
+}
+
+.camera-flip-btn:hover:not(:disabled) {
+  background: rgba(20, 108, 156, 0.88);
+}
+
+.camera-flip-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.camera-flip-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .camera-video,
