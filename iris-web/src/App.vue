@@ -26,6 +26,11 @@ body {
   overscroll-behavior-y: contain;
 }
 
+body.layout-desktop-app {
+  overflow: hidden;
+  background: #dfe4ea;
+}
+
 button,
 input {
   font: inherit;

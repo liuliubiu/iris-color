@@ -8,6 +8,9 @@ import {
   type AnalysisResult,
   type DetectionInfo,
 } from '../api/iris'
+import { useLayoutMode } from '../composables/useLayoutMode'
+
+const { isMobile } = useLayoutMode()
 
 const videoRef = ref<HTMLVideoElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -950,8 +953,30 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="page-shell">
-    <section class="hero">
+  <main class="page-shell" :class="{ 'layout-desktop': !isMobile }">
+    <!-- 桌面端：专业软件顶栏 -->
+    <header v-if="!isMobile" class="desktop-titlebar">
+      <div class="desktop-brand">
+        <div class="desktop-brand-mark" aria-hidden="true">豪</div>
+        <div class="desktop-brand-text">
+          <strong>豪赋-虹膜颜色识别</strong>
+          <span>虹膜颜色分级检测系统</span>
+        </div>
+      </div>
+      <div class="desktop-titlebar-tools">
+        <div class="desktop-status-chip">
+          <span class="status-dot" :class="{ active: cameraActive }"></span>
+          <span>{{ cameraActive ? `摄像头已就绪（${cameraFacing === 'environment' ? '后摄' : '前摄'}）` : '摄像头未接入' }}</span>
+        </div>
+        <label class="desktop-setting-toggle">
+          <el-switch v-model="skipQuality" size="small" />
+          <span>跳过质量检测</span>
+        </label>
+      </div>
+    </header>
+
+    <!-- 移动端：原有顶栏 -->
+    <section v-else class="hero">
       <div class="hero-copy">
         <span class="eyebrow">IRIS COLOR ANALYSIS</span>
         <h1>虹膜颜色识别</h1>
@@ -986,6 +1011,7 @@ onBeforeUnmount(() => {
     </transition>
     <div v-if="settingsOpen" class="mobile-settings-backdrop" @click="settingsOpen = false"></div>
 
+    <div class="workspace-shell">
     <section class="workflow-grid">
       <article
         ref="captureCardRef"
@@ -994,10 +1020,11 @@ onBeforeUnmount(() => {
       >
         <header class="card-header">
           <div>
-            <span class="section-kicker">Step 01</span>
+            <span v-if="isMobile" class="section-kicker">Step 01</span>
+            <span v-else class="section-kicker section-kicker--desktop">采集模块</span>
             <h2>图像采集</h2>
           </div>
-          <el-tag effect="plain" type="success">眼部特写</el-tag>
+          <el-tag v-if="isMobile" effect="plain" type="success">眼部特写</el-tag>
         </header>
 
         <div class="camera-box">
@@ -1121,7 +1148,7 @@ onBeforeUnmount(() => {
                 按校准区域重新识别
               </el-button>
             </div>
-            <div class="action-settings">
+            <div class="action-settings" v-if="isMobile">
               <el-checkbox v-model="skipQuality" class="quality-toggle">
                 跳过质量检测
               </el-checkbox>
@@ -1212,7 +1239,8 @@ onBeforeUnmount(() => {
       <article ref="resultCardRef" class="clinical-card result-card">
         <header class="card-header">
           <div>
-            <span class="section-kicker">Step 02</span>
+            <span v-if="isMobile" class="section-kicker">Step 02</span>
+            <span v-else class="section-kicker section-kicker--desktop">分析模块</span>
             <h2>分析结果</h2>
           </div>
           <button
@@ -1314,6 +1342,12 @@ onBeforeUnmount(() => {
         </div>
       </article>
     </section>
+    </div>
+
+    <footer v-if="!isMobile" class="desktop-statusbar">
+      <span>豪赋医疗 · 虹膜颜色识别</span>
+      <span>{{ loading ? '正在分析…' : result ? '分析完成' : '等待图像输入' }}</span>
+    </footer>
   </main>
 </template>
 
@@ -1928,6 +1962,290 @@ onBeforeUnmount(() => {
 .settings-slide-leave-to {
   transform: translateY(-10px);
   opacity: 0;
+}
+
+/* ============ 桌面端 / Electron 专业软件布局（≥641px，不影响手机） ============ */
+@media (min-width: 641px) {
+  .page-shell.layout-desktop {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    min-height: 100vh;
+    padding: 0;
+    overflow: hidden;
+    background: #dfe4ea;
+  }
+
+  .desktop-titlebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    height: 52px;
+    padding: 0 18px;
+    border-bottom: 1px solid #0f2233;
+    background: linear-gradient(180deg, #243b52 0%, #1a2f42 100%);
+    color: #eef4f8;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  }
+
+  .desktop-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .desktop-brand-mark {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    background: linear-gradient(145deg, #3a9fd4, #1876a9);
+    color: #fff;
+    font-size: 16px;
+    font-weight: 800;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  }
+
+  .desktop-brand-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .desktop-brand-text strong {
+    color: #fff;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+
+  .desktop-brand-text span {
+    color: rgba(220, 232, 240, 0.72);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+  }
+
+  .desktop-titlebar-tools {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+
+  .desktop-status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.18);
+    color: rgba(232, 241, 247, 0.92);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .desktop-setting-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: rgba(232, 241, 247, 0.88);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .workspace-shell {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .layout-desktop .workflow-grid {
+    grid-template-columns: minmax(0, 1fr) 400px;
+    gap: 0;
+    max-width: none;
+    height: 100%;
+    margin: 0;
+  }
+
+  .layout-desktop .clinical-card {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    padding: 16px 18px;
+    border: none;
+    border-radius: 0;
+    background: #f4f6f8;
+    box-shadow: none;
+    overflow: auto;
+  }
+
+  .layout-desktop .capture-card {
+    border-right: 1px solid #c5ced8;
+    background: #eef1f4;
+  }
+
+  .layout-desktop .result-card {
+    background: #fafbfc;
+    border-left: 1px solid #d8dee6;
+  }
+
+  .layout-desktop .card-header {
+    align-items: center;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #d8dee6;
+  }
+
+  .layout-desktop .card-header h2 {
+    font-size: 16px;
+    font-weight: 700;
+    color: #1a3348;
+  }
+
+  .layout-desktop .section-kicker--desktop {
+    margin-bottom: 4px;
+    color: #5a7388;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+  }
+
+  .layout-desktop .camera-box {
+    flex: 1;
+    min-height: 320px;
+    border: 1px solid #2a4055;
+    border-radius: 8px;
+    background: #0a1520;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  }
+
+  .layout-desktop .camera-box::after {
+    inset: 10px;
+    border-radius: 6px;
+    border-color: rgba(98, 202, 255, 0.16);
+  }
+
+  .layout-desktop .camera-video,
+  .layout-desktop .preview-img,
+  .layout-desktop .adjust-canvas,
+  .layout-desktop .crop-canvas {
+    max-height: none;
+    height: 100%;
+    min-height: 280px;
+  }
+
+  .layout-desktop .actions {
+    flex-shrink: 0;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid #d8dee6;
+  }
+
+  .layout-desktop .action-row :deep(.el-button) {
+    min-height: 36px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .layout-desktop .action-row--primary :deep(.el-button--primary) {
+    background: #1876a9;
+    border-color: #1876a9;
+  }
+
+  .layout-desktop .capture-tips {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid #d8dee6;
+  }
+
+  .layout-desktop .tip-item {
+    padding: 10px 12px;
+    border: 1px solid #d8dee6;
+    border-radius: 6px;
+    background: #fff;
+  }
+
+  .layout-desktop .tip-item span {
+    color: #1876a9;
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .layout-desktop .tip-item p {
+    margin: 6px 0 0;
+    color: #4a6278;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .layout-desktop .manual-panel,
+  .layout-desktop .crop-panel {
+    border-radius: 6px;
+    border-color: #cfd8e2;
+    background: #fff;
+  }
+
+  .layout-desktop .diagnosis-summary {
+    border-radius: 8px;
+    border: 1px solid #cfd8e2;
+    background: linear-gradient(180deg, #fff 0%, #f6f9fb 100%);
+  }
+
+  .layout-desktop .grade-number {
+    font-size: 28px;
+  }
+
+  .layout-desktop .metrics-grid {
+    gap: 10px;
+  }
+
+  .layout-desktop .metric-card {
+    border-radius: 6px;
+    border: 1px solid #d8dee6;
+    background: #fff;
+  }
+
+  .layout-desktop .evidence-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+
+  .layout-desktop .evidence-card {
+    border-radius: 6px;
+  }
+
+  .layout-desktop .empty-state,
+  .layout-desktop .result-loading {
+    border: 1px dashed #c5ced8;
+    border-radius: 8px;
+    background: #fff;
+  }
+
+  .desktop-statusbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    height: 28px;
+    padding: 0 14px;
+    border-top: 1px solid #b8c4d0;
+    background: linear-gradient(180deg, #e8edf2 0%, #dde4eb 100%);
+    color: #4a6278;
+    font-size: 11px;
+    font-weight: 600;
+  }
 }
 
 @media (max-width: 980px) {

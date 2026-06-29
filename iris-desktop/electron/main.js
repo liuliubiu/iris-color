@@ -121,8 +121,8 @@ async function isPortInUse(port) {
 
 function createSplashWindow() {
   splashWindow = new BrowserWindow({
-    width: 420,
-    height: 260,
+    width: 480,
+    height: 280,
     frame: false,
     resizable: false,
     center: true,
@@ -157,7 +157,7 @@ function createSplashWindow() {
 </head>
 <body>
   <div class="box">
-    <h1>IrisColor</h1>
+    <h1>豪赋-虹膜颜色识别</h1>
     <p class="dot">正在启动服务，请稍候…</p>
   </div>
 </body>
@@ -173,7 +173,7 @@ function createMainWindow() {
     minWidth: 960,
     minHeight: 640,
     show: false,
-    title: 'IrisColor',
+    title: '豪赋-虹膜颜色识别',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
