@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   analyzeIris,
@@ -38,6 +38,7 @@ const adjustCursor = ref('default')
 const cropCursor = ref('crosshair')
 const skipQuality = ref(false)
 const settingsOpen = ref(false)
+const cameraErrorOpen = ref(false)
 const isCoarsePointer =
   typeof window !== 'undefined' &&
   typeof window.matchMedia === 'function' &&
@@ -287,7 +288,7 @@ async function downloadResultReport() {
   }, 'image/png')
 }
 
-async function startCamera() {
+async function startCamera(options?: { showErrorOnFail?: boolean }): Promise<boolean> {
   stopCamera()
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -303,9 +304,22 @@ async function startCamera() {
       await videoRef.value.play()
       cameraActive.value = true
     }
+    return true
   } catch {
-    ElMessage.error('无法访问摄像头，请检查浏览器权限或使用文件上传')
+    if (options?.showErrorOnFail) {
+      cameraErrorOpen.value = true
+    }
+    return false
   }
+}
+
+function closeCameraErrorDialog() {
+  cameraErrorOpen.value = false
+}
+
+function openFilePickerFromCameraDialog() {
+  cameraErrorOpen.value = false
+  fileInputRef.value?.click()
 }
 
 async function switchCamera() {
@@ -327,7 +341,12 @@ function stopCamera() {
   cameraActive.value = false
 }
 
-function capturePhoto() {
+async function capturePhoto() {
+  if (!cameraActive.value || !videoRef.value?.videoWidth) {
+    const ok = await startCamera({ showErrorOnFail: true })
+    if (!ok) return
+  }
+
   const video = videoRef.value
   const canvas = canvasRef.value
   if (!video || !canvas) return
@@ -653,6 +672,20 @@ function applyAnalysisError(data: unknown) {
   errorMsg.value = parsed.message
   qualityCheckFailed.value = parsed.qualityCheckFailed
 }
+
+const errorNoticeTitle = computed(() => {
+  if (qualityCheckFailed.value) return '图像质量未达标'
+  return '分析未通过'
+})
+
+const errorNoticeDetail = computed(() => {
+  const msg = errorMsg.value
+  const prefix = '图像质量未达标：'
+  if (qualityCheckFailed.value && msg.startsWith(prefix)) {
+    return msg.slice(prefix.length)
+  }
+  return msg
+})
 
 async function skipQualityAndReanalyze() {
   skipQuality.value = true
@@ -1263,17 +1296,27 @@ onBeforeUnmount(() => {
           <span>正在分析虹膜颜色，请稍候...</span>
         </div>
 
-        <div v-else-if="errorMsg" class="error-panel">
-          <el-alert type="error" :title="errorMsg" show-icon :closable="false" />
-          <el-button
-            v-if="qualityCheckFailed"
-            type="warning"
-            class="skip-quality-btn"
-            :loading="loading"
-            @click="skipQualityAndReanalyze"
-          >
-            跳过质量检测并重新识别
-          </el-button>
+        <div v-else-if="errorMsg" class="analysis-notice" :class="{ 'is-quality': qualityCheckFailed }">
+          <div class="analysis-notice-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 8v5" stroke-linecap="round" />
+              <circle cx="12" cy="16.5" r="0.8" fill="currentColor" stroke="none" />
+            </svg>
+          </div>
+          <div class="analysis-notice-content">
+            <strong>{{ errorNoticeTitle }}</strong>
+            <p>{{ errorNoticeDetail }}</p>
+            <button
+              v-if="qualityCheckFailed"
+              type="button"
+              class="analysis-notice-action"
+              :disabled="loading"
+              @click="skipQualityAndReanalyze"
+            >
+              {{ loading ? '正在重新识别…' : '跳过质量检测并重新识别' }}
+            </button>
+          </div>
         </div>
 
         <div v-else-if="result" class="result-panel">
@@ -1348,6 +1391,39 @@ onBeforeUnmount(() => {
       <span>豪赋医疗 · 虹膜颜色识别</span>
       <span>{{ loading ? '正在分析…' : result ? '分析完成' : '等待图像输入' }}</span>
     </footer>
+
+    <!-- 摄像头不可用提示（仅用户点击拍照时触发） -->
+    <teleport to="body">
+      <div
+        v-if="cameraErrorOpen"
+        class="app-dialog-backdrop"
+        @click.self="closeCameraErrorDialog"
+      >
+        <div class="app-dialog" role="alertdialog" aria-labelledby="camera-dialog-title">
+          <header class="app-dialog-header">
+            <div class="app-dialog-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M3 7h4l2-3h6l2 3h4" />
+                <rect x="3" y="7" width="18" height="13" rx="2" />
+                <path d="M12 11v4" stroke-linecap="round" />
+              </svg>
+            </div>
+            <h3 id="camera-dialog-title">摄像头不可用</h3>
+          </header>
+          <p class="app-dialog-body">
+            无法访问摄像头，请检查系统或浏览器权限设置；您也可以直接上传眼部图片进行分析。
+          </p>
+          <footer class="app-dialog-footer">
+            <button type="button" class="app-dialog-btn app-dialog-btn--ghost" @click="closeCameraErrorDialog">
+              知道了
+            </button>
+            <button type="button" class="app-dialog-btn app-dialog-btn--primary" @click="openFilePickerFromCameraDialog">
+              选择文件
+            </button>
+          </footer>
+        </div>
+      </div>
+    </teleport>
   </main>
 </template>
 
@@ -1653,14 +1729,176 @@ onBeforeUnmount(() => {
   min-height: 40px;
 }
 
-.error-panel {
+.manual-panel {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid #d4dee8;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fff 0%, #f7fafc 100%);
+  box-shadow: 0 4px 14px rgba(36, 82, 118, 0.06);
 }
 
-.skip-quality-btn {
-  align-self: flex-start;
+.analysis-notice.is-quality {
+  border-color: #c8d9e8;
+  background: linear-gradient(180deg, #f8fbfe 0%, #f2f7fb 100%);
+}
+
+.analysis-notice-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: #e8f2f8;
+  color: #1876a9;
+}
+
+.analysis-notice.is-quality .analysis-notice-icon {
+  background: #e3edf5;
+  color: #156592;
+}
+
+.analysis-notice-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.analysis-notice-content strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #1a3348;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.analysis-notice-content p {
+  margin: 0;
+  color: #4a6278;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.analysis-notice-action {
+  margin-top: 12px;
+  padding: 8px 14px;
+  border: 1px solid #b8cedf;
+  border-radius: 6px;
+  background: #fff;
+  color: #1876a9;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.analysis-notice-action:hover:not(:disabled) {
+  border-color: #1876a9;
+  background: #eef6fb;
+  color: #125a7f;
+}
+
+.analysis-notice-action:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+/* 软件风格小弹窗（teleport 至 body，仍受 scoped 作用） */
+.app-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(10, 21, 32, 0.42);
+  backdrop-filter: blur(4px);
+}
+
+.app-dialog {
+  width: min(100%, 380px);
+  overflow: hidden;
+  border: 1px solid #c5d3df;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgba(16, 40, 62, 0.22);
+}
+
+.app-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e2eaf1;
+  background: linear-gradient(180deg, #f6f9fc 0%, #eef3f7 100%);
+}
+
+.app-dialog-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #e3edf5;
+  color: #1876a9;
+}
+
+.app-dialog-header h3 {
+  margin: 0;
+  color: #1a3348;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.app-dialog-body {
+  margin: 0;
+  padding: 16px;
+  color: #4a6278;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.app-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 16px 14px;
+  border-top: 1px solid #e8eef3;
+  background: #fafbfc;
+}
+
+.app-dialog-btn {
+  min-width: 88px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.app-dialog-btn--ghost {
+  border: 1px solid #c5d3df;
+  background: #fff;
+  color: #4a6278;
+}
+
+.app-dialog-btn--ghost:hover {
+  border-color: #1876a9;
+  background: #f3f8fb;
+  color: #1876a9;
+}
+
+.app-dialog-btn--primary {
+  border: 1px solid #1876a9;
+  background: #1876a9;
+  color: #fff;
+}
+
+.app-dialog-btn--primary:hover {
+  border-color: #125a7f;
+  background: #125a7f;
 }
 
 .manual-panel {
@@ -2267,10 +2505,6 @@ onBeforeUnmount(() => {
 
   .camera-box {
     min-height: 300px;
-  }
-
-  .skip-quality-btn {
-    width: 100%;
   }
 }
 
