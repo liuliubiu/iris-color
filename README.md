@@ -145,7 +145,23 @@ iris-color/
 └── iris-desktop/   # Windows 桌面版（Electron 壳）
 ```
 
-## Windows 桌面版
+## 品牌图标
+
+将所有图标放入 [`brand/`](brand/) 目录，然后执行同步：
+
+```powershell
+.\scripts\sync-brand.ps1
+```
+
+| 文件 | 用途 |
+|------|------|
+| `brand/logo.png` | 网页顶栏 Logo |
+| `brand/favicon.ico` | 浏览器标签页图标 |
+| `brand/app-icon.ico` | Windows 软件 / 安装包 / 任务栏图标 |
+
+详见 [`brand/README.md`](brand/README.md)。`npm run dev` 与桌面打包前会自动同步。
+
+---
 
 将系统打包为独立 Windows 软件（内置 JRE + Python，用户无需预装运行环境）。
 

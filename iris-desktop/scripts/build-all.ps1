@@ -22,6 +22,12 @@ $env:CSC_IDENTITY_AUTO_DISCOVERY = "false"
 
 Push-Location $DesktopDir
 try {
+    $SyncBrand = Join-Path $RootDir "scripts\sync-brand.ps1"
+    if (Test-Path $SyncBrand) {
+        Write-Host "=== 同步品牌图标 ==="
+        & $SyncBrand
+    }
+
     if (-not $SkipRuntimePrep) {
         $JreExe = Join-Path $ResourcesDir "jre\bin\java.exe"
         $PyExe = Join-Path $ResourcesDir "python\python.exe"

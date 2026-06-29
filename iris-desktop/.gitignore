@@ -1,0 +1,6 @@
+node_modules/
+dist/
+out/
+resources/jre/
+resources/python/
+resources/iris-api.jar

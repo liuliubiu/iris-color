@@ -1,6 +1,7 @@
 const path = require('path')
 const fs = require('fs')
 const http = require('http')
+const { pathToFileURL } = require('url')
 const { app, BrowserWindow, session, dialog } = require('electron')
 const { spawn } = require('child_process')
 
@@ -119,19 +120,37 @@ async function isPortInUse(port) {
   })
 }
 
+function getAppIconPath() {
+  const iconPath = path.join(__dirname, '..', 'build', 'icon.ico')
+  return fs.existsSync(iconPath) ? iconPath : undefined
+}
+
+function getSplashLogoSrc() {
+  const logoPath = path.join(__dirname, '..', 'build', 'logo.png')
+  if (!fs.existsSync(logoPath)) return ''
+  return pathToFileURL(logoPath).href
+}
+
 function createSplashWindow() {
+  const iconPath = getAppIconPath()
   splashWindow = new BrowserWindow({
     width: 480,
-    height: 280,
+    height: 300,
     frame: false,
     resizable: false,
     center: true,
     alwaysOnTop: true,
+    ...(iconPath ? { icon: iconPath } : {}),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
     },
   })
+
+  const logoSrc = getSplashLogoSrc()
+  const logoHtml = logoSrc
+    ? `<img src="${logoSrc}" alt="" width="64" height="64" style="display:block;margin:0 auto 16px;border-radius:14px;object-fit:contain;" />`
+    : `<div style="width:64px;height:64px;margin:0 auto 16px;border-radius:14px;background:rgba(255,255,255,0.15);display:grid;place-items:center;font-size:28px;font-weight:800;">豪</div>`
 
   const html = `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -149,7 +168,7 @@ function createSplashWindow() {
       height: 100vh;
     }
     .box { text-align: center; padding: 24px; }
-    h1 { font-size: 22px; margin: 0 0 12px; font-weight: 600; }
+    h1 { font-size: 20px; margin: 0 0 12px; font-weight: 600; }
     p { margin: 0; opacity: 0.9; font-size: 14px; }
     .dot { animation: pulse 1.2s infinite; }
     @keyframes pulse { 0%,100%{opacity:.4} 50%{opacity:1} }
@@ -157,6 +176,7 @@ function createSplashWindow() {
 </head>
 <body>
   <div class="box">
+    ${logoHtml}
     <h1>豪赋-虹膜颜色识别</h1>
     <p class="dot">正在启动服务，请稍候…</p>
   </div>
@@ -167,6 +187,7 @@ function createSplashWindow() {
 }
 
 function createMainWindow() {
+  const iconPath = getAppIconPath()
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -174,6 +195,7 @@ function createMainWindow() {
     minHeight: 640,
     show: false,
     title: '豪赋-虹膜颜色识别',
+    ...(iconPath ? { icon: iconPath } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,

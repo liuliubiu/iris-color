@@ -9,6 +9,7 @@ import {
   type DetectionInfo,
 } from '../api/iris'
 import { useLayoutMode } from '../composables/useLayoutMode'
+import BrandLogo from '../components/BrandLogo.vue'
 
 const { isMobile } = useLayoutMode()
 
@@ -990,7 +991,7 @@ onBeforeUnmount(() => {
     <!-- 桌面端：专业软件顶栏 -->
     <header v-if="!isMobile" class="desktop-titlebar">
       <div class="desktop-brand">
-        <div class="desktop-brand-mark" aria-hidden="true">豪</div>
+        <BrandLogo variant="desktop" />
         <div class="desktop-brand-text">
           <strong>豪赋-虹膜颜色识别</strong>
           <span>虹膜颜色分级检测系统</span>
@@ -1011,7 +1012,7 @@ onBeforeUnmount(() => {
     <!-- 移动端：原有顶栏 -->
     <section v-else class="hero">
       <div class="hero-copy">
-        <span class="eyebrow">IRIS COLOR ANALYSIS</span>
+        <BrandLogo variant="mobile" />
         <h1>虹膜颜色识别</h1>
       </div>
       <div class="hero-actions">
@@ -2235,16 +2236,7 @@ onBeforeUnmount(() => {
   }
 
   .desktop-brand-mark {
-    display: grid;
-    place-items: center;
-    width: 34px;
-    height: 34px;
-    border-radius: 8px;
-    background: linear-gradient(145deg, #3a9fd4, #1876a9);
-    color: #fff;
-    font-size: 16px;
-    font-weight: 800;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+    display: none;
   }
 
   .desktop-brand-text {
@@ -2549,13 +2541,9 @@ onBeforeUnmount(() => {
     max-width: none;
   }
 
-  /* 标题前的品牌色竖条，强化 App 标识感 */
+  /* 手机顶栏 Logo 由 BrandLogo 组件提供 */
   .hero-copy::before {
-    width: 4px;
-    height: 20px;
-    border-radius: 3px;
-    background: linear-gradient(180deg, #2f92c4, #1876a9);
-    content: '';
+    display: none;
   }
 
   .hero .eyebrow {

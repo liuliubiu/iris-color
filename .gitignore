@@ -18,6 +18,13 @@ target/
 node_modules/
 dist/
 *.local
+iris-web/node/
+
+# Desktop build artifacts
+iris-api/src/main/resources/static/
+iris-desktop/resources/
+iris-desktop/dist/
+iris-desktop/out/
 
 # IDE
 .idea/

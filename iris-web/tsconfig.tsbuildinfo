@@ -1,1 +1,1 @@
-{"root":["./src/main.ts","./src/vite-env.d.ts","./src/api/iris.ts","./src/composables/uselayoutmode.ts","./src/app.vue","./src/views/capturepage.vue"],"version":"5.7.3"}
+{"root":["./src/main.ts","./src/vite-env.d.ts","./src/api/iris.ts","./src/composables/uselayoutmode.ts","./src/config/brand.ts","./src/app.vue","./src/components/brandlogo.vue","./src/views/capturepage.vue"],"version":"5.7.3"}

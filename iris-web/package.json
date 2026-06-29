@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/sync-brand.ps1",
     "dev": "vite",
+    "prebuild": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/sync-brand.ps1",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview"
   },
