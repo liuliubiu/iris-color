@@ -1,5 +1,22 @@
-# L* 分档边界（上界，不含该值则进入更深档）
-boundaries: [30, 21, 19, 13]  
+# Pan 2017 Grade 1–5 分档（与虹膜颜色深浅独立，均可单独标定）
+grade:
+  # L* 四个递减上界 → Grade 1–5；恰在边界取较深档
+  boundaries: [55, 45, 29, 19]
+
+# 虹膜颜色：色相（a*/b*）+ 深浅（L* 三档）
+color_classification:
+  # 色相判定阈值
+  hue:
+    blue_b_max: -8.0       # b* 低于此值视为蓝色系
+    blue_a_max: 12.0       # 蓝色系时 a* 上限（排除偏红）
+    green_a_max: -3.0      # a* 低于此值视为绿色系
+    green_b_min: -5.0      # 绿色系 b* 下限
+    green_b_max: 35.0      # 绿色系 b* 上限
+  # 深浅分档（与 grade 独立）
+  depth:
+    # 两个递减上界 → 浅 / 中 / 深
+    # 浅: L* > b1；中: b2 < L* <= b1；深: L* <= b2；恰在边界取较深档
+    boundaries: [45, 19]
 
 # 定位模式: eye_closeup（默认，眼部特写）| face（全脸）| auto（先特写后全脸）
 detection:
@@ -8,7 +25,7 @@ detection:
 
 # 眼部特写：瞳孔 → 虹膜环带（相对瞳孔半径的倍数）
 eye_closeup:
-  center_roi_ratio: 0.85
+  center_roi_ratio: 0.85                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
   pupil_dark_percentile: 12.0
   inner_pupil_multiplier: 1.15  
   outer_pupil_multiplier: 2.8

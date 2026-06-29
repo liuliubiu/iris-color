@@ -63,8 +63,16 @@ def map_l_star_to_grade(l_star: float, boundaries: List[float]) -> GradeResult:
     return GradeResult(grade=grade, confidence=round(confidence, 2))
 
 
+def get_grade_boundaries(config: dict) -> List[float]:
+    """从配置读取 Pan Grade 边界（兼容旧版顶层 boundaries）。"""
+    grade_cfg = config.get("grade", {})
+    if "boundaries" in grade_cfg:
+        return grade_cfg["boundaries"]
+    return config["boundaries"]
+
+
 def grade_from_l_star(l_star: float, config_path: Path) -> GradeResult:
     """加载配置并分档（供 routes 调用）。"""
     config = load_config(config_path)
-    boundaries = config["boundaries"]
+    boundaries = get_grade_boundaries(config)
     return map_l_star_to_grade(l_star, boundaries)

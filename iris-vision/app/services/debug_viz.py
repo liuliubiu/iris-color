@@ -231,6 +231,8 @@ def build_debug_metrics(pipeline: AnalysisPipelineResult, highlight_v: int) -> d
             "label": pipeline.iris_color.label,
             "confidence": pipeline.iris_color.confidence,
             "reason": pipeline.iris_color.reason,
+            "hue": pipeline.iris_color.hue,
+            "depth": pipeline.iris_color.depth,
         },
         "grade": pipeline.grade.grade,
         "confidence": pipeline.grade.confidence,
