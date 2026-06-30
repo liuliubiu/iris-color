@@ -16,15 +16,15 @@ $DesktopDir = Join-Path $PSScriptRoot ".."
 $RootDir = Join-Path $DesktopDir ".."
 $ApiDir = Join-Path $RootDir "iris-api"
 $ResourcesDir = Join-Path $DesktopDir "resources"
+$WebDistJs = Get-ChildItem (Join-Path $RootDir "iris-web\dist\assets\*.js") -ErrorAction SilentlyContinue | Select-Object -First 1
 
-# 禁用 electron-builder 自动代码签名（避免下载 winCodeSign 及符号链接权限问题）
 $env:CSC_IDENTITY_AUTO_DISCOVERY = "false"
 
 Push-Location $DesktopDir
 try {
     $SyncBrand = Join-Path $RootDir "scripts\sync-brand.ps1"
     if (Test-Path $SyncBrand) {
-        Write-Host "=== 同步品牌图标 ==="
+        Write-Host "=== sync brand icons ==="
         & $SyncBrand
     }
 
@@ -32,17 +32,19 @@ try {
         $JreExe = Join-Path $ResourcesDir "jre\bin\java.exe"
         $PyExe = Join-Path $ResourcesDir "python\python.exe"
         if (-not (Test-Path $JreExe)) {
-            Write-Host "=== 准备 JRE ==="
+            Write-Host "=== prepare JRE ==="
             & (Join-Path $PSScriptRoot "prepare-jre.ps1")
         }
         if (-not (Test-Path $PyExe)) {
-            Write-Host "=== 准备 Python ==="
+            Write-Host "=== prepare Python ==="
             & (Join-Path $PSScriptRoot "prepare-python.ps1")
         }
     }
 
-    if (-not $SkipMaven) {
-        Write-Host "=== 构建 iris-api JAR（含前端 static）==="
+    if ($SkipMaven) {
+        Write-Warning "SkipMaven: resources/iris-api.jar will NOT be rebuilt. Use only for icon-only retries."
+    } else {
+        Write-Host "=== build iris-api JAR (with frontend static) ==="
         Push-Location $ApiDir
         & .\mvnw.cmd clean package -Pdesktop -DskipTests
         if ($LASTEXITCODE -ne 0) { throw "Maven build failed" }
@@ -60,18 +62,39 @@ try {
         Write-Host "Copied JAR: $($Jar.FullName)"
     }
 
-    Write-Host "=== 安装 Electron 依赖 ==="
-    if (-not (Test-Path (Join-Path $DesktopDir "node_modules"))) {
-        npm install
-        if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+    $WebDistJs = Get-ChildItem (Join-Path $RootDir "iris-web\dist\assets\*.js") -ErrorAction SilentlyContinue | Select-Object -First 1
+
+    if ($WebDistJs) {
+        $jarList = jar tf (Join-Path $ResourcesDir "iris-api.jar") 2>$null
+        $bundleName = $WebDistJs.Name
+        if ($jarList -match [regex]::Escape($bundleName)) {
+            Write-Host "JAR contains frontend bundle: $bundleName"
+        } else {
+            throw "JAR missing frontend bundle $bundleName - run without -SkipMaven"
+        }
     }
 
+    $BuildInfo = @(
+        "version=$((Get-Content (Join-Path $DesktopDir 'package.json') | ConvertFrom-Json).version)"
+        "built_at=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        "frontend=$($WebDistJs.Name)"
+    ) -join "`n"
+    Set-Content -Path (Join-Path $ResourcesDir "BUILD_INFO.txt") -Value $BuildInfo -Encoding UTF8
+
+    Write-Host "=== npm install (electron) ==="
+    npm install
+    if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+
     if (-not $SkipDist) {
-        Write-Host "=== 打包 Windows 安装程序 ==="
+        Write-Host "=== pack Windows installer ==="
+        if (Test-Path (Join-Path $DesktopDir "dist")) {
+            Remove-Item (Join-Path $DesktopDir "dist\*") -Recurse -Force -ErrorAction SilentlyContinue
+        }
         npm run dist
         if ($LASTEXITCODE -ne 0) { throw "electron-builder failed" }
         Write-Host ""
-        Write-Host "Done. Installer: $(Join-Path $DesktopDir 'dist')"
+        Write-Host "Done. Installer in: $(Join-Path $DesktopDir 'dist')"
+        Write-Host "IMPORTANT: Uninstall old 'IrisColor' if present, then install the new Setup exe."
     }
 }
 finally {

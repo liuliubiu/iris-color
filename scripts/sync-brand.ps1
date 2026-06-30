@@ -39,4 +39,15 @@ Sync-File "favicon.png" $WebBrand
 Sync-File "apple-touch-icon.png" $WebBrand
 Sync-File "logo.png" $DesktopBuild
 Sync-File "app-icon.ico" $DesktopBuild "icon.ico"
+
+$ConvertIcon = Join-Path $PSScriptRoot "convert-brand-icon.py"
+$Python = Join-Path $Root "iris-vision\.venv\Scripts\python.exe"
+if ((Test-Path $ConvertIcon) -and (Test-Path $Python)) {
+    Write-Host "  converting icon.ico for electron-builder..."
+    & $Python $ConvertIcon
+    if ($LASTEXITCODE -ne 0) { throw "convert-brand-icon.py failed" }
+} elseif (Test-Path (Join-Path $BrandDir "app-icon.ico")) {
+    Write-Warning "iris-vision venv not found; icon.ico may be invalid if app-icon.ico is PNG"
+}
+
 Write-Host "done."

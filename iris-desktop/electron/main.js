@@ -121,12 +121,18 @@ async function isPortInUse(port) {
 }
 
 function getAppIconPath() {
-  const iconPath = path.join(__dirname, '..', 'build', 'icon.ico')
-  return fs.existsSync(iconPath) ? iconPath : undefined
+  if (isPackaged()) {
+    const bundled = path.join(process.resourcesPath, 'icon.ico')
+    if (fs.existsSync(bundled)) return bundled
+  }
+  const devIcon = path.join(__dirname, '..', 'build', 'icon.ico')
+  return fs.existsSync(devIcon) ? devIcon : undefined
 }
 
 function getSplashLogoSrc() {
-  const logoPath = path.join(__dirname, '..', 'build', 'logo.png')
+  const logoPath = isPackaged()
+    ? path.join(process.resourcesPath, 'logo.png')
+    : path.join(__dirname, '..', 'build', 'logo.png')
   if (!fs.existsSync(logoPath)) return ''
   return pathToFileURL(logoPath).href
 }
@@ -215,7 +221,12 @@ function createMainWindow() {
     mainWindow = null
   })
 
-  mainWindow.loadURL(APP_URL)
+  void (async () => {
+    const session = mainWindow.webContents.session
+    await session.clearCache()
+    await session.clearStorageData({ storages: ['cachestorage', 'serviceworkers'] })
+    await mainWindow.loadURL(APP_URL)
+  })()
 }
 
 async function startVisionService() {

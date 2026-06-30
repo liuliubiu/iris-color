@@ -30,10 +30,12 @@ public class IrisAnalysisController {
     }
 
     @GetMapping("/health")
-    public ResponseEntity<Map<String, Object>> health() {
+    public ResponseEntity<Map<String, Object>> health(
+            @org.springframework.beans.factory.annotation.Value("${app.ui.version:unknown}") String uiVersion) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("status", "ok");
         result.put("service", "iris-api");
+        result.put("ui_version", uiVersion);
         try {
             result.put("vision", visionClientService.health());
         } catch (RestClientException ex) {

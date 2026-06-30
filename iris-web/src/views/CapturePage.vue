@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import {
   analyzeIris,
   analyzeIrisManual,
+  checkHealth,
   parseAnalysisError,
   type AnalysisResult,
   type DetectionInfo,
@@ -47,6 +48,7 @@ const isCoarsePointer =
 const touchTolBoost = isCoarsePointer ? 1.8 : 1
 const cameraFacing = ref<'environment' | 'user'>('environment')
 const cameraSwitching = ref(false)
+const appVersion = ref('')
 
 interface CropRect {
   x: number
@@ -977,6 +979,14 @@ function axiosIsError(err: unknown): err is { response?: { data?: unknown } } {
 
 onMounted(() => {
   startCamera()
+  if (!isMobile.value) {
+    checkHealth()
+      .then((h) => {
+        const v = (h as { ui_version?: string })?.ui_version
+        if (v) appVersion.value = v
+      })
+      .catch(() => {})
+  }
 })
 
 onBeforeUnmount(() => {
@@ -1389,7 +1399,7 @@ onBeforeUnmount(() => {
     </div>
 
     <footer v-if="!isMobile" class="desktop-statusbar">
-      <span>豪赋医疗 · 虹膜颜色识别</span>
+      <span>豪赋医疗 · 虹膜颜色识别<span v-if="appVersion" class="desktop-version"> · v{{ appVersion }}</span></span>
       <span>{{ loading ? '正在分析…' : result ? '分析完成' : '等待图像输入' }}</span>
     </footer>
 

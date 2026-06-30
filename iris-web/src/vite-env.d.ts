@@ -1,5 +1,15 @@
 /// <reference types="vite/client" />
 
+interface IrisDesktopBridge {
+  isDesktop: boolean
+}
+
+declare global {
+  interface Window {
+    irisDesktop?: IrisDesktopBridge
+  }
+}
+
 declare module '*.vue' {
   import type { DefineComponent } from 'vue'
   const component: DefineComponent<object, object, unknown>
