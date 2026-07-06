@@ -1358,12 +1358,6 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <el-descriptions class="reason-list" :column="1" border>
-            <el-descriptions-item label="颜色依据">
-              {{ result.iris_color?.reason ?? '-' }}
-            </el-descriptions-item>
-          </el-descriptions>
-
           <div v-if="result.debug_images" class="evidence-section">
             <div class="section-title">
               <h3>识别依据</h3>
@@ -2355,7 +2349,8 @@ onBeforeUnmount(() => {
     margin-bottom: 4px;
     color: #5a7388;
     font-size: 10px;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.06em;
+    text-transform: none;
   }
 
   .layout-desktop .camera-box {

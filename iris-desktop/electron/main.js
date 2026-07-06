@@ -1,7 +1,6 @@
 const path = require('path')
 const fs = require('fs')
 const http = require('http')
-const { pathToFileURL } = require('url')
 const { app, BrowserWindow, session, dialog } = require('electron')
 const { spawn } = require('child_process')
 
@@ -129,12 +128,35 @@ function getAppIconPath() {
   return fs.existsSync(devIcon) ? devIcon : undefined
 }
 
-function getSplashLogoSrc() {
-  const logoPath = isPackaged()
-    ? path.join(process.resourcesPath, 'logo.png')
-    : path.join(__dirname, '..', 'build', 'logo.png')
-  if (!fs.existsSync(logoPath)) return ''
-  return pathToFileURL(logoPath).href
+function destroySplash() {
+  if (!splashWindow || splashWindow.isDestroyed()) {
+    splashWindow = null
+    return
+  }
+  try {
+    splashWindow.setAlwaysOnTop(false)
+    splashWindow.destroy()
+  } catch {
+    /* ignore */
+  }
+  splashWindow = null
+}
+
+function getSplashLogoDataUri() {
+  const candidates = isPackaged()
+    ? [path.join(process.resourcesPath, 'logo.png'), path.join(process.resourcesPath, 'icon.ico')]
+    : [
+        path.join(__dirname, '..', 'build', 'logo.png'),
+        path.join(__dirname, '..', 'build', 'icon.ico'),
+      ]
+  for (const logoPath of candidates) {
+    if (!fs.existsSync(logoPath)) continue
+    const ext = path.extname(logoPath).toLowerCase()
+    const mime = ext === '.png' ? 'image/png' : ext === '.ico' ? 'image/x-icon' : 'image/png'
+    const buf = fs.readFileSync(logoPath)
+    return `data:${mime};base64,${buf.toString('base64')}`
+  }
+  return ''
 }
 
 function createSplashWindow() {
@@ -153,9 +175,9 @@ function createSplashWindow() {
     },
   })
 
-  const logoSrc = getSplashLogoSrc()
+  const logoSrc = getSplashLogoDataUri()
   const logoHtml = logoSrc
-    ? `<img src="${logoSrc}" alt="" width="64" height="64" style="display:block;margin:0 auto 16px;border-radius:14px;object-fit:contain;" />`
+    ? `<div style="width:72px;height:72px;margin:0 auto 16px;border-radius:14px;background:#fff;padding:6px;box-sizing:border-box;display:grid;place-items:center;box-shadow:0 2px 8px rgba(0,0,0,0.15);"><img src="${logoSrc}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;display:block;" /></div>`
     : `<div style="width:64px;height:64px;margin:0 auto 16px;border-radius:14px;background:rgba(255,255,255,0.15);display:grid;place-items:center;font-size:28px;font-weight:800;">豪</div>`
 
   const html = `<!DOCTYPE html>
@@ -210,10 +232,7 @@ function createMainWindow() {
   })
 
   mainWindow.once('ready-to-show', () => {
-    if (splashWindow && !splashWindow.isDestroyed()) {
-      splashWindow.close()
-      splashWindow = null
-    }
+    destroySplash()
     mainWindow.show()
   })
 
@@ -338,10 +357,15 @@ app.whenReady().then(async () => {
     await bootstrap()
   } catch (err) {
     shutdownServices()
-    if (splashWindow && !splashWindow.isDestroyed()) {
-      splashWindow.close()
-    }
-    dialog.showErrorBox('启动失败', err instanceof Error ? err.message : String(err))
+    destroySplash()
+    await new Promise((r) => setTimeout(r, 200))
+    await dialog.showMessageBox({
+      type: 'error',
+      title: '启动失败',
+      message: err instanceof Error ? err.message : String(err),
+      buttons: ['确定'],
+      noLink: true,
+    })
     app.quit()
   }
 })

@@ -173,7 +173,9 @@ cd iris-desktop
 ```
 
 首次构建会自动下载 JRE 17 与 Embeddable Python 3.11 并安装 `iris-vision` 依赖（约 500–700 MB 安装包）。  
-产出：`iris-desktop/dist/IrisColor Setup 0.1.0.exe`
+产出：`iris-desktop/dist/豪赋-虹膜颜色识别 Setup x.x.x.exe`
+
+> **若曾安装过旧版 `IrisColor`（英文名的安装包）**：请先在「设置 → 应用」中卸载，再安装新版。旧版与新版是不同程序，桌面可能同时存在两个快捷方式。
 
 ### 分步构建
 
