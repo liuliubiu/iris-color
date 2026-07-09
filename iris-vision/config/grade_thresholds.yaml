@@ -36,6 +36,28 @@ eye_closeup:
   detect_target_min_dim: 900
   # 性能：CIELAB 取色的有效像素上限，超过则固定种子随机抽样（中位数稳健）；0=不限
   color_sample_cap: 20000
+  # 性能：整条流水线（质量/定位/取色/调试图）的工作分辨率上限（最短边）；0=不限
+  process_max_dim: 1600
+  # 取色鲁棒修剪：Lab 转换后按 L* 中位数 ± N×MAD 剔除离群（睫毛/残余高光）；0=关闭
+  color_trim_mad: 2.5
+
+  # 镜筒特写（黑边框+亮圆视场）：检测视场圆并裁掉黑边，同时作为虹膜尺度先验
+  scope_field:
+    enabled: true
+    v_threshold: 12            # 亮区判定阈值（V 通道），纯黑镜筒边框远低于此
+    skip_if_bright_ratio: 0.90 # 亮区占比超过此值视为普通图，不裁剪
+    min_fill_ratio: 0.55       # 亮区须基本填满外接圆，否则不视为镜筒图
+    min_radius_ratio: 0.25     # 视场圆半径下限（相对小图最短边）
+    margin_ratio: 0.02         # 裁剪外接框边距（相对视场半径）
+    iris_r_min_ratio: 0.35     # 虹膜半径/视场半径 下限（实拍标定值约 0.45-0.65）
+    iris_r_max_ratio: 0.75     # 上限
+
+  # 环带扇区遮挡剔除：砍掉眼皮/睫毛/反光楔形区（人工调整结果不过滤）
+  ring_sectors:
+    enabled: true
+    count: 36                  # 扇区数
+    v_dev_max: 45.0            # 扇区亮度中位数偏离全环中位数超过此值即剔除
+    min_keep_ratio: 0.40       # 保留扇区占比低于此值视为过滤失败，回退原环带
 
   # 眼部先验（MediaPipe FaceLandmarker）：仅用于「抢救」疑似眉毛误检的全帧结果。
   # 全帧结果是黑盘且左右两侧白色巩膜占比都低于 eyebrow_suspect_sclera_min 时，
@@ -82,6 +104,7 @@ iris_ring:
   outer_ratio: 0.80
 
 quality:
+  # 镜筒特写只统计视场圆内（实测 25 张镜筒图 blur 分布 24~142，均高于此阈值）
   blur_threshold: 15.0
   overexposed_ratio_max: 0.15
   min_sample_pixels: 50

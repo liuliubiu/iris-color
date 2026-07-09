@@ -6,6 +6,8 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
+from app.services.scope_field import ScopeField
+
 
 @dataclass
 class PupilEstimate:
@@ -510,6 +512,218 @@ def _surround_stats(
     return support, float(np.mean(values))
 
 
+def _fit_circle_kasa(xs: np.ndarray, ys: np.ndarray) -> Optional[Tuple[float, float, float]]:
+    """Kasa 代数最小二乘圆拟合，返回 (cx, cy, r)。"""
+    if len(xs) < 3:
+        return None
+    a_mat = np.column_stack([xs, ys, np.ones(len(xs))])
+    b_vec = xs * xs + ys * ys
+    try:
+        sol, *_ = np.linalg.lstsq(a_mat, b_vec, rcond=None)
+    except np.linalg.LinAlgError:
+        return None
+    cx = float(sol[0]) / 2.0
+    cy = float(sol[1]) / 2.0
+    r_sq = float(sol[2]) + cx * cx + cy * cy
+    if r_sq <= 0:
+        return None
+    return cx, cy, float(np.sqrt(r_sq))
+
+
+def _dark_blob_seed(
+    luminance: np.ndarray,
+    scope_cx: float,
+    scope_cy: float,
+    scope_r: float,
+) -> Optional[Tuple[float, float]]:
+    """
+    视场中心区（0.55r 内）暗连通域的质心，作为虹膜中心种子。
+
+    镜筒对准眼球拍摄，瞳孔（或瞳孔+暗虹膜核）总在视场中心附近；
+    限制在中心区可避免被下方限带阴影、睫毛丛等外围暗结构拉偏。
+    """
+    h, w = luminance.shape[:2]
+    interior = np.zeros((h, w), dtype=np.uint8)
+    cv2.circle(interior, (int(scope_cx), int(scope_cy)), max(int(scope_r * 0.55), 1), 255, -1)
+    vals = luminance[interior > 0]
+    if vals.size == 0:
+        return None
+    thr = float(np.percentile(vals, 25))
+    dark = ((luminance <= thr) & (interior > 0)).astype(np.uint8) * 255
+    open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, open_kernel)
+    close_size = max(int(scope_r * 0.12) | 1, 9)
+    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_size, close_size))
+    dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, close_kernel)
+    num, labels, stats, centroids = cv2.connectedComponentsWithStats(dark, connectivity=8)
+    if num <= 1:
+        return None
+    idx = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    cx, cy = centroids[idx]
+    return float(cx), float(cy)
+
+
+def _detect_disk_by_rays(
+    luminance: np.ndarray,
+    scope_cx: float,
+    scope_cy: float,
+    scope_r: float,
+    r_min_ratio: float,
+    r_max_ratio: float,
+) -> Optional[Tuple[float, float, float, float]]:
+    """
+    镜筒特写专用：种子中心 + 径向亮度跃升点 + 圆拟合迭代。
+
+    虹膜边缘在这类图上是软梯度（角膜缘暗环 → 亮巩膜），Hough 常常漏检；
+    直接沿下方 240° 射线找「暗 → 亮」最大跃升点再做稳健圆拟合，
+    对上眼皮遮挡与局部反光都不敏感。返回 (cx, cy, r, confidence)。
+    """
+    seed = _dark_blob_seed(luminance, scope_cx, scope_cy, scope_r)
+    if seed is None:
+        return None
+    cx, cy = seed
+
+    angles = np.deg2rad(np.linspace(-20.0, 200.0, 48, endpoint=False))
+    r_lo = scope_r * r_min_ratio * 0.75
+    r_hi = scope_r * r_max_ratio * 1.10
+    result = None
+
+    for _ in range(3):
+        pts_x, pts_y, radii = [], [], []
+        radial = np.linspace(r_lo, r_hi, 90)
+        for angle in angles:
+            xs = cx + np.cos(angle) * radial
+            ys = cy + np.sin(angle) * radial
+            values = _sample_luminance_at(luminance, xs, ys)
+            smooth = _smooth_profile(values, 7)
+            gradients = np.diff(smooth)
+            if len(gradients) < 10:
+                continue
+            # 全局最大跃升：可能停在虹膜内部纹理上（半径略小），但采样环
+            # 仍全落在虹膜内，对取色安全；宁可偏小也不越过巩膜
+            idx = int(np.argmax(gradients))
+            if idx < 3 or idx > len(gradients) - 4:
+                continue
+            local_gain = float(gradients[idx])
+            total_gain = float(
+                smooth[min(idx + 5, len(smooth) - 1)] - smooth[max(idx - 5, 0)]
+            )
+            if local_gain < 2.0 and total_gain < 8.0:
+                continue
+            pts_x.append(float(xs[idx]))
+            pts_y.append(float(ys[idx]))
+            radii.append(float(radial[idx]))
+
+        if len(radii) < 12:
+            break
+
+        radii_arr = np.asarray(radii, dtype=np.float32)
+        median_r = float(np.median(radii_arr))
+        mad = float(np.median(np.abs(radii_arr - median_r))) or 1.0
+        inlier = np.abs(radii_arr - median_r) <= 2.0 * mad
+        if int(inlier.sum()) < 10:
+            break
+
+        fit = _fit_circle_kasa(
+            np.asarray(pts_x, dtype=np.float64)[inlier],
+            np.asarray(pts_y, dtype=np.float64)[inlier],
+        )
+        if fit is None:
+            break
+        fx, fy, fr = fit
+
+        # 拟合结果必须落在视场先验内
+        center_dist = ((fx - scope_cx) ** 2 + (fy - scope_cy) ** 2) ** 0.5
+        if (
+            fr < scope_r * r_min_ratio * 0.9
+            or fr > scope_r * r_max_ratio * 1.05
+            or center_dist > scope_r * 0.75
+        ):
+            break
+
+        support = float(inlier.sum()) / float(len(angles))
+        confidence = float(np.clip(0.35 + support * 0.6, 0.35, 0.95))
+        result = (fx, fy, fr, confidence)
+        cx, cy = fx, fy
+        r_lo = fr * 0.75
+        r_hi = fr * 1.25
+
+    if result is None:
+        return None
+    # 终检：边界内外须有「暗 → 亮」跃升，拒绝锁在睫毛暗斑上的假圆
+    fx, fy, fr, confidence = result
+    support, contrast = _boundary_stats(luminance, fx, fy, fr, 5.0)
+    if support < 0.45 or contrast < 6.0:
+        return None
+    return result
+
+
+def _boundary_stats(
+    luminance: np.ndarray,
+    cx: float,
+    cy: float,
+    radius: float,
+    margin: float,
+) -> Tuple[float, float]:
+    """
+    圆边界两侧采样：返回 (外亮于内的角度占比, 内外亮度差中位数)。
+
+    镜筒实拍的虹膜常是亮棕色，「盘内均值暗于外侧」不成立；但虹膜边缘的
+    角膜缘暗环 → 巩膜的亮度跃升非常稳定。在 0.90r / 1.12r 两侧采样、
+    只统计下方 240° 弧段（上方被眼皮遮挡），比全盘均值可靠得多。
+    """
+    angles = np.deg2rad(np.linspace(-30.0, 210.0, 24, endpoint=False))
+    in_vals = _sample_luminance_at(
+        luminance, cx + np.cos(angles) * radius * 0.90, cy + np.sin(angles) * radius * 0.90
+    )
+    out_vals = _sample_luminance_at(
+        luminance, cx + np.cos(angles) * radius * 1.12, cy + np.sin(angles) * radius * 1.12
+    )
+    diff = out_vals - in_vals
+    support = float(np.mean(diff > margin))
+    contrast = float(np.median(diff))
+    return support, contrast
+
+
+def _refine_disk_radius(
+    luminance: np.ndarray,
+    cx: float,
+    cy: float,
+    radius: float,
+) -> float:
+    """
+    沿下方 240° 弧段的射线把半径吸附到最大亮度跃升处（角膜缘 → 巩膜）。
+
+    Hough 半径步长较粗，直接用会把环带压进巩膜或缩进虹膜；
+    按射线梯度中位数精修可稳定贴合真实虹膜外缘。
+    """
+    angles = np.deg2rad(np.linspace(-30.0, 210.0, 36, endpoint=False))
+    radial = np.linspace(radius * 0.78, radius * 1.22, 56)
+    refined = []
+    for angle in angles:
+        xs = cx + np.cos(angle) * radial
+        ys = cy + np.sin(angle) * radial
+        values = _sample_luminance_at(luminance, xs, ys)
+        smooth = _smooth_profile(values, 5)
+        gradients = np.diff(smooth)
+        if len(gradients) == 0:
+            continue
+        idx = int(np.argmax(gradients))
+        if gradients[idx] < 2.0 or idx < 2 or idx > len(gradients) - 3:
+            continue
+        refined.append(float(radial[idx]))
+
+    if len(refined) < 10:
+        return radius
+    arr = np.asarray(refined, dtype=np.float32)
+    median = float(np.median(arr))
+    mad = float(np.median(np.abs(arr - median))) or 1.0
+    inliers = arr[np.abs(arr - median) <= 2.5 * mad]
+    if len(inliers) < 8:
+        return radius
+    return float(np.median(inliers))
+
+
 def _estimate_pupil_in_disk(
     luminance: np.ndarray,
     cx: float,
@@ -638,12 +852,19 @@ def detect_iris_disk(
     sclera_s_max: float = 60.0,
     sclera_bilateral_min: float = 0.0,
     target_min_dim: int = 700,
+    scope: Optional[ScopeField] = None,
+    scope_iris_min_ratio: float = 0.35,
+    scope_iris_max_ratio: float = 0.75,
 ) -> Optional[IrisDiskEstimate]:
     """
     黑盘直检：直接用 Hough 找虹膜/巩膜的圆形边界，再用「内暗外亮」验证。
 
     适用于瞳孔与虹膜融成一团黑、且与睫毛/眉毛/眼窝阴影连成一片的实拍图——
     此时暗区连通域不再是圆，必须靠圆形边界（梯度）而非暗区面积定位。
+
+    scope 非空（镜筒特写）时启用视场先验：虹膜半径限制在视场半径的
+    [scope_iris_min_ratio, scope_iris_max_ratio] 区间、圆心须在视场内、
+    环绕验证只看下方 240° 弧段（上方是眼皮）。
     """
     h, w = image_bgr.shape[:2]
     min_dim = min(h, w)
@@ -661,12 +882,53 @@ def detect_iris_disk(
     sh, sw = luminance.shape[:2]
     s_min_dim = min(sh, sw)
 
-    min_r = max(int(s_min_dim * min_radius_ratio), 8)
-    max_r = max(int(s_min_dim * max_radius_ratio), min_r + 1)
+    scope_cx = scope_cy = scope_r = None
+    if scope is not None:
+        scope_cx = scope.center_x * scale
+        scope_cy = scope.center_y * scale
+        scope_r = scope.radius * scale
+
+    if scope_r is not None:
+        # 镜筒特写主路径：种子中心 + 径向跃升 + 圆拟合（对软边缘/遮挡更稳）
+        ray_fit = _detect_disk_by_rays(
+            luminance, scope_cx, scope_cy, scope_r,
+            scope_iris_min_ratio, scope_iris_max_ratio,
+        )
+        if ray_fit is not None:
+            cx, cy, iris_r, confidence = ray_fit
+            pupil_r, estimated = _estimate_pupil_in_disk(
+                luminance, cx, cy, iris_r, pupil_iris_ratio
+            )
+            inv = 1.0 / scale
+            candidate_mask = np.zeros((h, w), dtype=np.uint8)
+            cv2.circle(
+                candidate_mask,
+                (int(cx * inv), int(cy * inv)),
+                int(iris_r * inv),
+                255,
+                2,
+            )
+            return IrisDiskEstimate(
+                center_x=int(cx * inv),
+                center_y=int(cy * inv),
+                iris_radius=float(iris_r * inv),
+                pupil_radius=float(pupil_r * inv),
+                confidence=confidence,
+                method="iris_disk_rays",
+                pupil_estimated=estimated,
+                candidate_mask=candidate_mask,
+            )
+        # 兜底：Hough 候选 + 边界跃升验证，搜索半径仍受视场先验约束
+        min_r = max(int(scope_r * scope_iris_min_ratio), 8)
+        max_r = max(int(scope_r * scope_iris_max_ratio), min_r + 1)
+    else:
+        min_r = max(int(s_min_dim * min_radius_ratio), 8)
+        max_r = max(int(s_min_dim * max_radius_ratio), min_r + 1)
     blurred = cv2.medianBlur(luminance, 5)
 
-    # 多阈值收集候选并去重：严阈值给强边界，松阈值补遮挡/弱边界
-    # 强阈值（param2=30）一旦给出足够候选就提前短路，省掉松阈值扫描
+    # 多阈值收集候选并去重：严阈值给强边界，松阈值补遮挡/弱边界。
+    # 镜筒图（有视场先验）三档全量收集后统一评分，避免小假圆挤掉被遮挡的真虹膜；
+    # 普通图保留「凑够 2 个候选提前短路」，与既有回归基线一致。
     candidates: dict = {}
     for param2 in (30, 22, 16):
         circles = cv2.HoughCircles(
@@ -684,7 +946,7 @@ def detect_iris_disk(
                 cx, cy, radius = float(circle[0]), float(circle[1]), float(circle[2])
                 key = (round(cx / 12), round(cy / 12), round(radius / 12))
                 candidates.setdefault(key, (cx, cy, radius))
-        if len(candidates) >= 2:
+        if scope is None and len(candidates) >= 2:
             break
     if not candidates:
         return None
@@ -693,8 +955,34 @@ def detect_iris_disk(
     best = None
     best_score = -float("inf")
     for cx, cy, radius in candidates.values():
+        if scope_r is not None:
+            # 镜筒特写：虹膜是亮棕色时「盘内暗于外侧」不成立，改用
+            # 边界跃升验证（角膜缘暗环 → 巩膜），且只看下方 240° 弧段。
+            center_dist = ((cx - scope_cx) ** 2 + (cy - scope_cy) ** 2) ** 0.5
+            if center_dist > scope_r * 0.75:
+                continue
+            if center_dist + radius > scope_r * 1.05:
+                continue
+            support, contrast = _boundary_stats(luminance, cx, cy, radius, 5.0)
+            if support < surround_support_min or contrast < 6.0:
+                continue
+            sclera = _sclera_fraction(hsv, cx, cy, radius, sclera_v_min, sclera_s_max)
+            score = (
+                support * 2.0
+                + min(contrast / 40.0, 1.0) * 2.0
+                + min(radius / scope_r, 1.0)
+                + sclera * 0.6
+                - (center_dist / scope_r) * 0.8
+            )
+            if score > best_score:
+                best_score = score
+                best = (cx, cy, radius, support, sclera)
+            continue
+
         inside = _inside_mean(luminance, cx, cy, radius)
-        support, outside = _surround_stats(luminance, cx, cy, radius, inside, surround_contrast * 0.5)
+        support, outside = _surround_stats(
+            luminance, cx, cy, radius, inside, surround_contrast * 0.5
+        )
         contrast = outside - inside
         # 虹膜与巩膜的强反差是区分「眼睛」与「眉毛/睫毛/皮肤暗块」的关键：
         # 眉毛被皮肤包围时反差≈0，虹膜被巩膜包围时反差很大。
@@ -725,6 +1013,9 @@ def detect_iris_disk(
         return None
 
     cx, cy, iris_r, support, sclera = best
+    if scope_r is not None:
+        # Hough 半径较粗，按下方弧段的亮度跃升精修外缘
+        iris_r = _refine_disk_radius(luminance, cx, cy, iris_r)
     pupil_r, estimated = _estimate_pupil_in_disk(luminance, cx, cy, iris_r, pupil_iris_ratio)
 
     inv = 1.0 / scale

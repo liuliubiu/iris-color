@@ -1,7 +1,7 @@
 """取色与高光剔除（含调试用 mask）。"""
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import colorspacious
 import cv2
@@ -95,18 +95,73 @@ def compute_sampling_masks(
     )
 
 
+def filter_ring_mask_sectors(
+    image_bgr: np.ndarray,
+    mask: np.ndarray,
+    center: Tuple[int, int],
+    sector_count: int = 36,
+    v_dev_max: float = 45.0,
+    min_keep_ratio: float = 0.40,
+) -> Tuple[np.ndarray, int]:
+    """
+    按角度把环带分成扇区，剔除亮度中位数偏离全环中位数过多的扇区。
+
+    实拍图虹膜上部常被眼皮/睫毛遮挡，环带完整圆环会采到皮肤（偏亮）或
+    睫毛丛（偏暗）；异常扇区整块剔除比逐像素过滤更稳。保留扇区不足
+    min_keep_ratio 时视为过滤失败，返回原 mask（kept=0 表示未过滤）。
+    """
+    ys, xs = np.nonzero(mask)
+    if len(ys) == 0:
+        return mask, 0
+
+    hsv_v = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)[:, :, 2]
+    values = hsv_v[ys, xs].astype(np.float32)
+
+    cx, cy = float(center[0]), float(center[1])
+    angles = np.arctan2(ys.astype(np.float32) - cy, xs.astype(np.float32) - cx)
+    sector_idx = ((angles + np.pi) / (2 * np.pi) * sector_count).astype(np.int32)
+    sector_idx = np.clip(sector_idx, 0, sector_count - 1)
+
+    medians = np.full(sector_count, np.nan, dtype=np.float32)
+    for s in range(sector_count):
+        sel = sector_idx == s
+        if np.any(sel):
+            medians[s] = float(np.median(values[sel]))
+
+    present = ~np.isnan(medians)
+    if not np.any(present):
+        return mask, 0
+    global_median = float(np.median(medians[present]))
+    keep_sector = present & (np.abs(medians - global_median) <= v_dev_max)
+
+    kept = int(np.count_nonzero(keep_sector))
+    if kept < max(int(sector_count * min_keep_ratio), 1):
+        return mask, 0
+
+    keep_pixel = keep_sector[sector_idx]
+    filtered = np.zeros_like(mask)
+    filtered[ys[keep_pixel], xs[keep_pixel]] = 255
+    return filtered, kept
+
+
 def extract_iris_lab_median(
     image_bgr: np.ndarray,
     mask: np.ndarray,
     highlight_v_threshold: int = 240,
     sample_cap: int = 0,
+    masks: Optional[SamplingMasks] = None,
+    mad_trim: float = 0.0,
 ) -> LabResult:
     """在 mask 区域内取色，剔除高光，返回 CIELAB 中位数。
 
+    masks 可传入已算好的 SamplingMasks，避免重复的全图 HSV 转换。
     sample_cap > 0 且有效像素超过该上限时，固定随机种子抽样后再做 CIELAB 转换：
     中位数对抽样稳健，大图可省去十几万像素的 colorspacious 转换，显著提速。
+    mad_trim > 0 时按 L* 中位数 ± mad_trim×MAD 修剪离群像素（睫毛暗像素、
+    残余高光）后再取中位数。
     """
-    masks = compute_sampling_masks(image_bgr, mask, highlight_v_threshold)
+    if masks is None:
+        masks = compute_sampling_masks(image_bgr, mask, highlight_v_threshold)
     pixels_bgr = image_bgr[masks.valid]
 
     total = len(pixels_bgr)
@@ -120,6 +175,16 @@ def extract_iris_lab_median(
 
     pixels_rgb = pixels_bgr[:, ::-1].astype(np.float64) / 255.0
     lab_array = colorspacious.cspace_convert(pixels_rgb, "sRGB1", "CIELab")
+
+    if mad_trim > 0 and len(lab_array) >= 100:
+        l_channel = lab_array[:, 0]
+        median_l = float(np.median(l_channel))
+        mad = float(np.median(np.abs(l_channel - median_l)))
+        if mad > 1e-6:
+            inliers = np.abs(l_channel - median_l) <= mad_trim * mad
+            # 修剪过狠说明分布双峰（遮挡未除净），保守起见不修剪
+            if int(inliers.sum()) >= max(int(len(lab_array) * 0.5), 50):
+                lab_array = lab_array[inliers]
 
     return LabResult(
         L=float(np.median(lab_array[:, 0])),

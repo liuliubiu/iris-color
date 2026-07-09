@@ -169,13 +169,30 @@ def draw_valid_samples(
     return out
 
 
+def _shrink_to_max_dim(image_bgr: np.ndarray, max_dim: int) -> np.ndarray:
+    """最长边超过 max_dim 时等比缩小（仅用于展示/编码，坐标语义不变）。"""
+    if max_dim <= 0:
+        return image_bgr
+    h, w = image_bgr.shape[:2]
+    longest = max(h, w)
+    if longest <= max_dim:
+        return image_bgr
+    scale = max_dim / longest
+    return cv2.resize(image_bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+
+
 def build_debug_images(
-    image_bgr: np.ndarray,
     pipeline: AnalysisPipelineResult,
     eye_closeup_cfg: dict,
+    max_dim: int = 1200,
 ) -> Dict[str, np.ndarray]:
-    """生成全部调试叠加图。"""
-    return {
+    """生成全部调试叠加图。
+
+    在工作图（已裁剪/降采样）上绘制——detection/sampling 均为工作图坐标；
+    输出前统一压到 max_dim 最长边，避免全分辨率拷贝与超大 base64。
+    """
+    image_bgr = pipeline.work_image
+    images = {
         "01_pupil_candidates": draw_pupil_candidates(image_bgr, pipeline.detection),
         "01_pupil_localization": draw_pupil_localization(
             image_bgr,
@@ -187,27 +204,48 @@ def build_debug_images(
         "04_valid_samples": draw_valid_samples(image_bgr, pipeline.sampling),
         "05_ring_mask_only": cv2.applyColorMap(pipeline.detection.mask, cv2.COLORMAP_JET),
     }
+    return {name: _shrink_to_max_dim(img, max_dim) for name, img in images.items()}
 
 
 def build_debug_metrics(pipeline: AnalysisPipelineResult, highlight_v: int) -> dict:
-    """数值指标，便于对照图检查。"""
+    """数值指标，便于对照图检查。坐标/半径均换算回原图坐标系。"""
     det = pipeline.detection
     smp = pipeline.sampling
+    transform = pipeline.transform
+
+    def _pt(point):
+        if point is None:
+            return None
+        x, y = transform.to_original_xy(float(point[0]), float(point[1]))
+        return [int(round(x)), int(round(y))]
+
+    def _len(value):
+        if value is None:
+            return None
+        return round(transform.to_original_len(float(value)), 1)
+
+    pupil_center = _pt(det.pupil_center)
+    scope = pipeline.scope
     return {
         "detection_method": det.method,
         "detection_mode": pipeline.detection_mode,
         "manual_adjusted": det.method == "manual_adjustment",
         "manual_params": {
-            "center_x": det.pupil_center[0] if det.pupil_center else None,
-            "center_y": det.pupil_center[1] if det.pupil_center else None,
-            "pupil_radius": det.pupil_radius,
-            "inner_radius": det.inner_radius,
-            "outer_radius": det.outer_radius,
+            "center_x": pupil_center[0] if pupil_center else None,
+            "center_y": pupil_center[1] if pupil_center else None,
+            "pupil_radius": _len(det.pupil_radius),
+            "inner_radius": _len(det.inner_radius),
+            "outer_radius": _len(det.outer_radius),
         } if det.method == "manual_adjustment" else None,
-        "pupil_center": list(det.pupil_center) if det.pupil_center else None,
-        "pupil_radius": det.pupil_radius,
-        "inner_radius": det.inner_radius,
-        "outer_radius": det.outer_radius,
+        "pupil_center": pupil_center,
+        "pupil_radius": _len(det.pupil_radius),
+        "inner_radius": _len(det.inner_radius),
+        "outer_radius": _len(det.outer_radius),
+        "scope_field": {
+            "center": _pt((scope.center_x, scope.center_y)),
+            "radius": _len(scope.radius),
+        } if scope is not None else None,
+        "work_scale": round(transform.scale, 4),
         "ring_pixel_count": int(smp.ring.sum()),
         "highlight_rejected_count": int(smp.highlight_in_ring.sum()),
         "bright_rejected_count": int(smp.bright_in_ring.sum()),

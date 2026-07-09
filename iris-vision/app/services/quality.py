@@ -1,12 +1,13 @@
 """图像质量检测：模糊、过曝、睁眼（模式可配置）。"""
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 import cv2
 import numpy as np
 
 from app.services.face_landmarker import detect_face_landmarks
+from app.services.scope_field import ScopeField
 
 _LEFT_EYE_TOP = 159
 _LEFT_EYE_BOTTOM = 145
@@ -40,15 +41,40 @@ class QualityResult:
     passed: bool
 
 
-def compute_blur_score(image_bgr: np.ndarray) -> float:
-    """拉普拉斯方差，越大越清晰。"""
+def _scope_interior_mask(shape, scope: Optional[ScopeField]) -> Optional[np.ndarray]:
+    """视场圆内部 bool mask；无视场时返回 None（全图统计）。"""
+    if scope is None:
+        return None
+    h, w = shape[:2]
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.circle(
+        mask,
+        (int(round(scope.center_x)), int(round(scope.center_y))),
+        max(int(scope.radius * 0.98), 1),
+        255,
+        -1,
+    )
+    return mask > 0
+
+
+def compute_blur_score(image_bgr: np.ndarray, scope: Optional[ScopeField] = None) -> float:
+    """拉普拉斯方差，越大越清晰。镜筒图只统计视场圆内（黑边方差≈0 会稀释分数）。"""
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    lap = cv2.Laplacian(gray, cv2.CV_32F)
+    interior = _scope_interior_mask(gray.shape, scope)
+    if interior is not None and np.any(interior):
+        return float(lap[interior].var())
+    return float(lap.var())
 
 
-def compute_overexposed_ratio(image_bgr: np.ndarray, threshold: int = 250) -> float:
-    """RGB 三通道均高于 threshold 的像素占比。"""
+def compute_overexposed_ratio(
+    image_bgr: np.ndarray, threshold: int = 250, scope: Optional[ScopeField] = None
+) -> float:
+    """RGB 三通道均高于 threshold 的像素占比。镜筒图只统计视场圆内。"""
     over = np.all(image_bgr >= threshold, axis=2)
+    interior = _scope_interior_mask(over.shape, scope)
+    if interior is not None and np.any(interior):
+        return float(np.mean(over[interior]))
     return float(np.mean(over))
 
 
@@ -76,15 +102,17 @@ def check_quality(
     blur_threshold: float,
     overexposed_ratio_max: float,
     detection_mode: str = "eye_closeup",
+    scope: Optional[ScopeField] = None,
 ) -> QualityResult:
     """
     综合质量检测。
 
     eye_closeup 模式不做全脸「闭眼」检测（特写图通常无法检出人脸 landmark）。
+    scope 非空（镜筒特写）时模糊/过曝只统计视场圆内。
     """
     issues: List[str] = []
-    blur_score = compute_blur_score(image_bgr)
-    overexposed_ratio = compute_overexposed_ratio(image_bgr)
+    blur_score = compute_blur_score(image_bgr, scope=scope)
+    overexposed_ratio = compute_overexposed_ratio(image_bgr, scope=scope)
 
     if detection_mode in ("face", "auto"):
         eye_open = _is_eye_open_via_face(image_bgr)

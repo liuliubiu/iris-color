@@ -67,7 +67,8 @@ def _build_debug_response(
     debug_cfg = config.get("debug", {})
     highlight_v = config.get("highlight_v_threshold", 240)
     eye_cfg = config.get("eye_closeup", {})
-    images = build_debug_images(image_bgr, pipeline, eye_cfg)
+    images = build_debug_images(pipeline, eye_cfg)
+    # 00_original 保留原始分辨率：调试台人工校准画布依赖原图坐标系
     all_images = {"00_original": image_bgr, **images}
     metrics = build_debug_metrics(pipeline, highlight_v)
 

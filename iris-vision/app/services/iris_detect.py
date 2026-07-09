@@ -16,6 +16,7 @@ from app.services.eye_iris_detect import (
 )
 from app.services.eye_roi import EyePrior, detect_eye_prior
 from app.services.face_landmarker import detect_face_landmarks
+from app.services.scope_field import ScopeField
 
 _LEFT_IRIS_CENTER = 468
 _RIGHT_IRIS_CENTER = 473
@@ -331,9 +332,11 @@ def _detect_rough(
     detect_image: np.ndarray,
     full_shape: Tuple[int, int],
     eye_cfg: dict,
+    scope: Optional[ScopeField] = None,
 ) -> Optional[IrisDetectionResult]:
     """阶段B：黑盘直检（适合瞳孔与虹膜融成一团黑的实拍图）。"""
     disk_cfg = eye_cfg.get("disk", {})
+    scope_cfg = eye_cfg.get("scope_field", {})
     disk = detect_iris_disk(
         detect_image,
         dark_percentile=disk_cfg.get("dark_percentile", 35.0),
@@ -348,6 +351,9 @@ def _detect_rough(
         sclera_s_max=disk_cfg.get("sclera_s_max", 60.0),
         sclera_bilateral_min=disk_cfg.get("sclera_bilateral_min", 0.0),
         target_min_dim=int(disk_cfg.get("target_min_dim", 700)),
+        scope=scope,
+        scope_iris_min_ratio=float(scope_cfg.get("iris_r_min_ratio", 0.35)),
+        scope_iris_max_ratio=float(scope_cfg.get("iris_r_max_ratio", 0.75)),
     )
     if disk is None:
         return None
@@ -415,21 +421,23 @@ def _detect_modes_core(
     eye_cfg: dict,
     mode: str,
     prefer_disk: bool = False,
+    scope: Optional[ScopeField] = None,
 ) -> Optional[IrisDetectionResult]:
     """在给定图像（全帧或 ROI）上按 mode 跑精定位/黑盘直检。结果坐标为该图局部坐标。
 
     prefer_disk: 大图（已降采样的实拍照片）经验上黑盘直检更稳，优先 disk；
     小清晰图沿用精定位优先。这与全量回归一致：所有大图基线均走 disk。
+    scope: 镜筒视场圆（该图局部坐标），作为黑盘直检的尺度/位置先验。
     """
     shape = img.shape
     if mode == "precise":
         return _detect_precise(img, shape, eye_cfg, spec_mask)
     if mode == "rough":
-        return _detect_rough(img, shape, eye_cfg)
+        return _detect_rough(img, shape, eye_cfg, scope)
 
     # auto
-    if prefer_disk:
-        rough = _detect_rough(img, shape, eye_cfg)
+    if prefer_disk or scope is not None:
+        rough = _detect_rough(img, shape, eye_cfg, scope)
         if rough is not None and rough.sample_pixel_count > 0:
             return rough
         return _detect_precise(img, shape, eye_cfg, spec_mask)
@@ -466,6 +474,7 @@ def _run_modes(
     eye_cfg: dict,
     mode: str,
     prefer_disk: bool = False,
+    scope: Optional[ScopeField] = None,
 ) -> Optional[IrisDetectionResult]:
     """
     先走全帧逻辑；仅当全帧中心与眼部先验明显不一致（疑似锁在眉毛/睫毛上）时，
@@ -474,7 +483,7 @@ def _run_modes(
     先验与全帧一致时（WechatIMG1027 等）完全不介入，保证已验证结果不受影响；
     模型缺失/无脸时 prior=None，同样走原路径。
     """
-    base = _detect_modes_core(detect_image, spec_mask, eye_cfg, mode, prefer_disk)
+    base = _detect_modes_core(detect_image, spec_mask, eye_cfg, mode, prefer_disk, scope)
     if mode == "precise" or prior is None or prior.roi is None:
         return base
     if not _prior_disagrees(base, prior, eye_cfg):
@@ -500,6 +509,7 @@ def _detect_from_eye_closeup(
     image_bgr: np.ndarray,
     eye_cfg: dict,
     mode: str = "auto",
+    scope: Optional[ScopeField] = None,
 ) -> Optional[IrisDetectionResult]:
     """
     眼部特写模式：统一降采样 → 镜面反光修复 → 眼部先验 ROI → 两阶段定位，最后缩放回全分辨率。
@@ -509,10 +519,20 @@ def _detect_from_eye_closeup(
       - precise: 强制阶段A（清晰精定位）
       - rough: 强制阶段B（实拍黑盘直检）
     眼部先验（MediaPipe）缺席时优雅回退到纯几何启发式。
+    scope: 镜筒视场圆（image_bgr 坐标），存在时跳过 MediaPipe 先验并约束黑盘直检。
     """
     target = int(eye_cfg.get("detect_target_min_dim", 900))
     small, scale = _downscale_for_detection(image_bgr, target)
     inv = 1.0 / scale
+
+    scope_small = scope
+    if scope is not None and scale < 1.0:
+        scope_small = ScopeField(
+            center_x=scope.center_x * scale,
+            center_y=scope.center_y * scale,
+            radius=scope.radius * scale,
+            bright_ratio=scope.bright_ratio,
+        )
 
     specular_cfg = eye_cfg.get("specular", {})
     if specular_cfg.get("enabled", True):
@@ -529,15 +549,18 @@ def _detect_from_eye_closeup(
     # 反光跳过默认关闭：经回归会扰动清晰小图（误把高光当反光），且对实测反光图无增益
     detect_spec = spec_mask if specular_cfg.get("skip_rays", False) else None
 
+    # 镜筒特写检不出人脸，MediaPipe 先验必然落空，直接跳过省一次模型推理
     prior = None
-    if eye_cfg.get("use_landmark_prior", True):
+    if scope is None and eye_cfg.get("use_landmark_prior", True):
         prior = detect_eye_prior(
             detect_image, float(eye_cfg.get("landmark_roi_margin", 3.0))
         )
 
     # 经降采样的大图（实拍照片）优先黑盘直检；小清晰图沿用精定位优先
     prefer_disk = scale < 1.0
-    result = _run_modes(detect_image, detect_spec, prior, eye_cfg, mode, prefer_disk)
+    result = _run_modes(
+        detect_image, detect_spec, prior, eye_cfg, mode, prefer_disk, scope_small
+    )
     return _scale_detection_to_full(result, inv, image_bgr.shape)
 
 
@@ -548,6 +571,7 @@ def detect_iris_ring_mask(
     outer_ratio: float = 0.80,
     eye_closeup_cfg: Optional[dict] = None,
     closeup_mode: str = "auto",
+    scope: Optional[ScopeField] = None,
 ) -> Optional[IrisDetectionResult]:
     """
     检测虹膜环带 mask。
@@ -561,16 +585,18 @@ def detect_iris_ring_mask(
       - auto: 精定位置信度达标用精定位，否则回退黑盘直检
       - precise: 强制清晰精定位
       - rough: 强制实拍黑盘直检
+
+    scope: 镜筒视场圆（image_bgr 坐标），由预处理提供；仅 eye_closeup 路径使用。
     """
     eye_cfg = eye_closeup_cfg or {}
 
     if mode == "eye_closeup":
-        return _detect_from_eye_closeup(image_bgr, eye_cfg, mode=closeup_mode)
+        return _detect_from_eye_closeup(image_bgr, eye_cfg, mode=closeup_mode, scope=scope)
     if mode == "face":
         return _detect_from_face_landmarks(image_bgr, inner_ratio, outer_ratio)
 
     # auto
-    result = _detect_from_eye_closeup(image_bgr, eye_cfg, mode=closeup_mode)
+    result = _detect_from_eye_closeup(image_bgr, eye_cfg, mode=closeup_mode, scope=scope)
     if result is not None:
         return result
     return _detect_from_face_landmarks(image_bgr, inner_ratio, outer_ratio)

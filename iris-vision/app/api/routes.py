@@ -58,8 +58,8 @@ def _parse_manual_params(raw: str) -> dict:
         raise HTTPException(status_code=400, detail="manual_params_must_be_numbers") from exc
 
 
-def _build_result_debug_images(image_bgr: np.ndarray, result, config: dict) -> dict:
-    images = build_debug_images(image_bgr, result, config.get("eye_closeup", {}))
+def _build_result_debug_images(result, config: dict) -> dict:
+    images = build_debug_images(result, config.get("eye_closeup", {}))
     wanted = {
         "01_pupil_localization": images["01_pupil_localization"],
         "02_iris_ring": images["02_iris_ring"],
@@ -70,7 +70,13 @@ def _build_result_debug_images(image_bgr: np.ndarray, result, config: dict) -> d
 
 def _to_analysis_response(result, image_bgr: np.ndarray, config: dict) -> AnalysisResponse:
     det = result.detection
+    transform = result.transform
     center_x, center_y = det.pupil_center or det.center
+    orig_cx, orig_cy = transform.to_original_xy(float(center_x), float(center_y))
+
+    def _len(value: float) -> float:
+        return float(transform.to_original_len(float(value)))
+
     return AnalysisResponse(
         quality=QualityInfo(
             blur_score=round(result.quality.blur_score, 2),
@@ -90,15 +96,16 @@ def _to_analysis_response(result, image_bgr: np.ndarray, config: dict) -> Analys
             confidence=result.iris_color.confidence,
             reason=result.iris_color.reason,
         ),
+        # 坐标换算回原图坐标系：前端在原图上做人工校准
         detection=DetectionInfo(
-            center_x=int(center_x),
-            center_y=int(center_y),
-            pupil_radius=float(det.pupil_radius or 0),
-            inner_radius=float(det.inner_radius or 0),
-            outer_radius=float(det.outer_radius or det.radius),
+            center_x=int(round(orig_cx)),
+            center_y=int(round(orig_cy)),
+            pupil_radius=_len(det.pupil_radius or 0),
+            inner_radius=_len(det.inner_radius or 0),
+            outer_radius=_len(det.outer_radius or det.radius),
             method=det.method,
         ),
-        debug_images=_build_result_debug_images(image_bgr, result, config),
+        debug_images=_build_result_debug_images(result, config),
         grade=result.grade.grade,
         confidence=result.grade.confidence,
         detection_method=result.detection.method,
