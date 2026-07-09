@@ -37,6 +37,9 @@ iris-desktop/out/
 .DS_Store
 Thumbs.db
 
+# Local image assets (not for version control)
+img/
+
 # Upload temp
 uploads/
 tmp/

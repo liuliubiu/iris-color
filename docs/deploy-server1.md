@@ -108,9 +108,11 @@ XFTP：上传整个 `iris-vision` 目录（排除 `.venv`、`__pycache__` 可减
 yum install -y mesa-libGL        # 或 dnf install -y mesa-libGL；个别环境再加 glib2
 ```
 
+
 ```bash
 cd /home/server/iris-color/iris-vision
-python3 -m venv .venv
+python3 -m venv .venv 
+//（注意若默认版本为低版本需更换为高版本python执行以下指令，默认路径大概率为/usr/bin/python3.11）
 source .venv/bin/activate
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 python scripts/download_model.py   # 若未上传模型
