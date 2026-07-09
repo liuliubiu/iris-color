@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>虹膜真值标注</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #0d1117; color: #e6edf3; }
+  header { padding: 10px 16px; background: #161b22; border-bottom: 1px solid #30363d; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .grow { flex: 1; }
+  input[type="text"], input[type="number"] { background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 5px 8px; }
+  button { background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button:hover { background: #30363d; }
+  button.primary { background: #238636; border-color: #2ea043; }
+  button.primary:hover { background: #2ea043; }
+  .layout { display: flex; height: calc(100vh - 53px); }
+  .sidebar { width: 260px; overflow-y: auto; border-right: 1px solid #30363d; background: #0d1117; }
+  .thumb { padding: 8px 12px; border-bottom: 1px solid #21262d; cursor: pointer; font-size: 13px; display: flex; justify-content: space-between; gap: 6px; }
+  .thumb:hover { background: #161b22; }
+  .thumb.active { background: #1f6feb33; border-left: 3px solid #1f6feb; }
+  .thumb .tag { font-size: 11px; color: #8b949e; }
+  .thumb .done { color: #3fb950; }
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .toolbar { padding: 8px 16px; background: #161b22; border-bottom: 1px solid #30363d; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .canvas-wrap { flex: 1; overflow: auto; background: #000; display: flex; align-items: center; justify-content: center; }
+  canvas { touch-action: none; cursor: crosshair; }
+  label.radio { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; padding: 4px 10px; border: 1px solid #30363d; border-radius: 6px; }
+  label.radio.pupil.on { background: #1f6feb44; border-color: #1f6feb; }
+  label.radio.iris.on { background: #2ea04344; border-color: #2ea043; }
+  .field { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: #8b949e; }
+  .field input { width: 70px; }
+  .hint { font-size: 12px; color: #8b949e; }
+  .status { font-size: 12px; color: #58a6ff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>虹膜真值标注</h1>
+  <div class="field">API Key <input type="text" id="apiKey" value="iris-color-dev" style="width:130px" /></div>
+  <button id="reload">载入列表</button>
+  <span class="status" id="progress"></span>
+  <div class="grow"></div>
+  <span class="hint">在图上「按住圆心 → 拖到边缘 → 松开」定义当前圆；滚轮微调半径</span>
+</header>
+<div class="layout">
+  <div class="sidebar" id="sidebar"></div>
+  <div class="main">
+    <div class="toolbar">
+      <label class="radio pupil on" id="radioPupil"><input type="radio" name="target" value="pupil" checked />瞳孔（内圈·蓝）</label>
+      <label class="radio iris" id="radioIris"><input type="radio" name="target" value="iris" />虹膜（外圈·绿）</label>
+      <span class="field">瞳孔 cx<input type="number" id="pcx" /></span>
+      <span class="field">cy<input type="number" id="pcy" /></span>
+      <span class="field">r<input type="number" id="pr" /></span>
+      <span class="field">虹膜 cx<input type="number" id="icx" /></span>
+      <span class="field">cy<input type="number" id="icy" /></span>
+      <span class="field">r<input type="number" id="ir" /></span>
+      <button id="autoBtn">自动预填</button>
+      <button class="primary" id="saveBtn">保存真值 (S)</button>
+      <button id="prevBtn">上一张 (A)</button>
+      <button id="nextBtn">下一张 (D)</button>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="canvas" width="800" height="600"></canvas>
+    </div>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas');
+const ctx = canvas.getContext('2d');
+
+let images = [];
+let current = null;          // {rel,width,height}
+let img = new Image();
+let dispScale = 1;           // display px / original px
+let truth = {};              // rel -> {pupil,iris}
+// 当前标注（原图坐标）
+let shapes = { pupil: { cx: 0, cy: 0, r: 0 }, iris: { cx: 0, cy: 0, r: 0 } };
+let target = 'pupil';
+let dragging = false;
+
+function apiKey() { return $('apiKey').value.trim(); }
+
+async function loadList() {
+  const r = await fetch(`/label/list?key=${encodeURIComponent(apiKey())}`);
+  if (!r.ok) { alert('载入失败: ' + r.status); return; }
+  const data = await r.json();
+  images = data.images;
+  const tr = await fetch(`/label/truth?key=${encodeURIComponent(apiKey())}`);
+  truth = tr.ok ? await tr.json() : {};
+  renderSidebar();
+  updateProgress();
+  if (images.length && !current) selectImage(images[0].rel);
+}
+
+function updateProgress() {
+  const done = images.filter((it) => truth[it.rel]).length;
+  $('progress').textContent = `已标注 ${done} / ${images.length}`;
+}
+
+function renderSidebar() {
+  const sb = $('sidebar');
+  sb.innerHTML = '';
+  for (const it of images) {
+    const div = document.createElement('div');
+    div.className = 'thumb' + (current && current.rel === it.rel ? ' active' : '');
+    const done = truth[it.rel] ? '<span class="done">✓</span>' : '';
+    div.innerHTML = `<span>${it.rel}</span><span class="tag">${it.width}×${it.height} ${done}</span>`;
+    div.onclick = () => selectImage(it.rel);
+    sb.appendChild(div);
+  }
+}
+
+function selectImage(rel) {
+  current = images.find((it) => it.rel === rel);
+  if (!current) return;
+  img = new Image();
+  img.onload = () => {
+    dispScale = img.naturalWidth / current.width; // 服务端已按最长边缩放
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    // 载入已存真值或给个居中默认
+    const saved = truth[rel];
+    if (saved) {
+      shapes = JSON.parse(JSON.stringify(saved));
+    } else {
+      const cx = current.width / 2, cy = current.height / 2;
+      const r = Math.min(current.width, current.height) * 0.28;
+      shapes = { pupil: { cx, cy, r: r * 0.35 }, iris: { cx, cy, r } };
+    }
+    syncInputs();
+    draw();
+  };
+  img.src = `/label/image?rel=${encodeURIComponent(rel)}&key=${encodeURIComponent(apiKey())}&t=${Date.now()}`;
+  renderSidebar();
+}
+
+// 原图坐标 -> 画布坐标
+const toDisp = (v) => v * dispScale;
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0);
+  drawCircle(shapes.iris, '#2ea043', target === 'iris');
+  drawCircle(shapes.pupil, '#1f6feb', target === 'pupil');
+}
+
+function drawCircle(s, color, active) {
+  if (s.r <= 0) return;
+  ctx.lineWidth = active ? 3 : 2;
+  ctx.strokeStyle = color;
+  ctx.beginPath();
+  ctx.arc(toDisp(s.cx), toDisp(s.cy), toDisp(s.r), 0, Math.PI * 2);
+  ctx.stroke();
+  // 圆心十字
+  ctx.beginPath();
+  const cx = toDisp(s.cx), cy = toDisp(s.cy), h = 7;
+  ctx.moveTo(cx - h, cy); ctx.lineTo(cx + h, cy);
+  ctx.moveTo(cx, cy - h); ctx.lineTo(cx, cy + h);
+  ctx.stroke();
+}
+
+function canvasPoint(e) {
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+  const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+  return { x: x / dispScale, y: y / dispScale }; // 原图坐标
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  const p = canvasPoint(e);
+  shapes[target].cx = p.x;
+  shapes[target].cy = p.y;
+  shapes[target].r = 0;
+  dragging = true;
+  canvas.setPointerCapture(e.pointerId);
+  syncInputs();
+  draw();
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const p = canvasPoint(e);
+  const s = shapes[target];
+  s.r = Math.hypot(p.x - s.cx, p.y - s.cy);
+  syncInputs();
+  draw();
+});
+canvas.addEventListener('pointerup', (e) => { dragging = false; });
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const s = shapes[target];
+  s.r = Math.max(1, s.r * (e.deltaY < 0 ? 1.03 : 0.97));
+  syncInputs();
+  draw();
+}, { passive: false });
+
+function syncInputs() {
+  $('pcx').value = Math.round(shapes.pupil.cx);
+  $('pcy').value = Math.round(shapes.pupil.cy);
+  $('pr').value = Math.round(shapes.pupil.r);
+  $('icx').value = Math.round(shapes.iris.cx);
+  $('icy').value = Math.round(shapes.iris.cy);
+  $('ir').value = Math.round(shapes.iris.r);
+}
+for (const [id, path] of [['pcx', ['pupil', 'cx']], ['pcy', ['pupil', 'cy']], ['pr', ['pupil', 'r']],
+                          ['icx', ['iris', 'cx']], ['icy', ['iris', 'cy']], ['ir', ['iris', 'r']]]) {
+  $(id).addEventListener('input', () => {
+    const v = parseFloat($(id).value);
+    if (!isNaN(v)) { shapes[path[0]][path[1]] = v; draw(); }
+  });
+}
+
+function setTarget(t) {
+  target = t;
+  $('radioPupil').classList.toggle('on', t === 'pupil');
+  $('radioIris').classList.toggle('on', t === 'iris');
+  document.querySelector(`input[name=target][value=${t}]`).checked = true;
+  draw();
+}
+$('radioPupil').onclick = () => setTarget('pupil');
+$('radioIris').onclick = () => setTarget('iris');
+
+async function autoFill() {
+  if (!current) return;
+  const r = await fetch(`/label/auto?rel=${encodeURIComponent(current.rel)}&key=${encodeURIComponent(apiKey())}`);
+  const d = await r.json();
+  if (!d.ok) { alert('自动检测失败: ' + (d.error || r.status)); return; }
+  shapes.pupil = { cx: d.pupil.cx, cy: d.pupil.cy, r: d.pupil.r };
+  shapes.iris = { cx: d.iris.cx, cy: d.iris.cy, r: d.iris.r };
+  syncInputs();
+  draw();
+}
+
+async function save() {
+  if (!current) return;
+  const body = { rel: current.rel, pupil: shapes.pupil, iris: shapes.iris };
+  const r = await fetch(`/label/truth?key=${encodeURIComponent(apiKey())}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  if (!r.ok) { alert('保存失败: ' + r.status); return; }
+  truth[current.rel] = JSON.parse(JSON.stringify(shapes));
+  renderSidebar();
+  updateProgress();
+  $('progress').textContent += '  ·已保存';
+}
+
+function navigate(delta) {
+  if (!current) return;
+  const idx = images.findIndex((it) => it.rel === current.rel);
+  const next = images[idx + delta];
+  if (next) selectImage(next.rel);
+}
+
+$('reload').onclick = loadList;
+$('autoBtn').onclick = autoFill;
+$('saveBtn').onclick = save;
+$('prevBtn').onclick = () => navigate(-1);
+$('nextBtn').onclick = () => navigate(1);
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 's' || e.key === 'S') save();
+  else if (e.key === 'a' || e.key === 'A') navigate(-1);
+  else if (e.key === 'd' || e.key === 'D') navigate(1);
+  else if (e.key === '1') setTarget('pupil');
+  else if (e.key === '2') setTarget('iris');
+});
+
+loadList();
+</script>
+</body>
+</html>

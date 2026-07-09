@@ -82,11 +82,9 @@ def run_analysis(
 ) -> AnalysisPipelineResult:
     """执行预处理 → 质量检测 → 定位 → 取色 → 分档。"""
     quality_cfg = config.get("quality", {})
-    ring_cfg = config.get("iris_ring", {})
-    detection_cfg = config.get("detection", {})
     eye_closeup_cfg = config.get("eye_closeup", {})
     highlight_v = config.get("highlight_v_threshold", 240)
-    detection_mode = detection_cfg.get("mode", "eye_closeup")
+    detection_mode = "eye_closeup"
 
     # 镜筒特写：裁掉黑边并统一工作分辨率；普通图仅按需降采样
     pre = preprocess_capture(image_bgr, eye_closeup_cfg)
@@ -98,7 +96,6 @@ def run_analysis(
         work,
         blur_threshold=quality_cfg.get("blur_threshold", 15.0),
         overexposed_ratio_max=quality_cfg.get("overexposed_ratio_max", 0.15),
-        detection_mode=detection_mode,
         scope=scope,
     )
     if not skip_quality and not quality.passed:
@@ -112,9 +109,6 @@ def run_analysis(
     else:
         detection = detect_iris_ring_mask(
             work,
-            mode=detection_mode,
-            inner_ratio=ring_cfg.get("inner_ratio", 0.30),
-            outer_ratio=ring_cfg.get("outer_ratio", 0.80),
             eye_closeup_cfg=eye_closeup_cfg,
             closeup_mode=closeup_mode,
             scope=scope,

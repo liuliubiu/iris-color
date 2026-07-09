@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.debug_files import router as debug_files_router
 from app.api.debug_routes import router as debug_router
+from app.api.label_routes import router as label_router
 from app.api.routes import router
 
 app = FastAPI(
@@ -31,3 +32,4 @@ app.add_middleware(
 app.include_router(router)
 app.include_router(debug_router)
 app.include_router(debug_files_router)
+app.include_router(label_router)
