@@ -43,6 +43,8 @@ class IrisDiskEstimate:
     confidence: float
     method: str = "iris_disk"
     pupil_estimated: bool = True
+    pupil_center_x: Optional[int] = None
+    pupil_center_y: Optional[int] = None
     candidate_mask: Optional[np.ndarray] = None
 
 
@@ -105,6 +107,44 @@ def _center_roi_bounds(shape: Tuple[int, int], ratio: float) -> Tuple[int, int, 
     x1 = (w - roi_w) // 2
     y1 = (h - roi_h) // 2
     return x1, y1, roi_w, roi_h
+
+
+def _detect_scope_mask(image_bgr: np.ndarray, v_threshold: int = 10) -> np.ndarray:
+    """识别圆形拍摄视野，过滤显微镜黑边和画面外黑场。"""
+    h, w = image_bgr.shape[:2]
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    mask = (hsv[:, :, 2] > v_threshold).astype(np.uint8) * 255
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return np.full((h, w), 255, dtype=np.uint8)
+
+    largest = max(contours, key=cv2.contourArea)
+    area = cv2.contourArea(largest)
+    if area < h * w * 0.20:
+        return np.full((h, w), 255, dtype=np.uint8)
+
+    scope = np.zeros((h, w), dtype=np.uint8)
+    cv2.drawContours(scope, [largest], -1, 255, -1)
+    scope = cv2.erode(scope, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
+    return scope
+
+
+def _circle_scope_fraction(
+    scope_mask: Optional[np.ndarray], cx: float, cy: float, radius: float
+) -> float:
+    """候选圆落在有效拍摄视野内的比例。"""
+    if scope_mask is None:
+        return 1.0
+    mask = np.zeros(scope_mask.shape, dtype=np.uint8)
+    cv2.circle(mask, (int(round(cx)), int(round(cy))), max(int(round(radius)), 1), 255, -1)
+    total = int(np.count_nonzero(mask))
+    if total == 0:
+        return 0.0
+    return float(np.count_nonzero((mask > 0) & (scope_mask > 0)) / total)
 
 
 def _detect_pupil_hough(gray: np.ndarray, min_dim: int) -> Optional[PupilEstimate]:
@@ -330,6 +370,7 @@ def _estimate_iris_outer_radius(
     pupil: PupilEstimate,
     outer_pupil_multiplier: float,
     spec_mask: Optional[np.ndarray] = None,
+    scope_mask: Optional[np.ndarray] = None,
 ) -> Tuple[float, str, float]:
     """沿多条射线寻找虹膜到巩膜/皮肤的外缘。"""
     h, w = luminance.shape[:2]
@@ -343,13 +384,16 @@ def _estimate_iris_outer_radius(
         return fallback, "fallback_multiplier", 0.25
 
     radii = []
+    # 实拍图上方经常被眼皮/睫毛遮挡，优先使用左右与下半弧段估计虹膜外缘。
     angles = np.deg2rad(
-        [-45, -35, -25, -15, 0, 15, 25, 35, 45, 135, 145, 155, 165, 180, 195, 205, 215, 225]
+        [-25, -12, 0, 12, 25, 40, 55, 70, 85, 100, 115, 130, 145, 160, 180, 200, 220]
     )
     radial_samples = np.linspace(start_r, end_r, 120)
     for angle in angles:
         xs = cx + np.cos(angle) * radial_samples
         ys = cy + np.sin(angle) * radial_samples
+        if scope_mask is not None and _ray_spec_fraction(scope_mask, xs, ys) < 0.85:
+            continue
         if _ray_spec_fraction(spec_mask, xs, ys) > 0.3:
             continue
         values = _sample_luminance_at(luminance, xs, ys)
@@ -432,6 +476,56 @@ def build_iris_ring_from_pupil(
     return mask, outer_r, inner_r, sample_count
 
 
+def _build_visible_iris_mask(
+    image_bgr: np.ndarray,
+    cx: float,
+    cy: float,
+    inner_r: float,
+    outer_r: float,
+    *,
+    scope_mask: Optional[np.ndarray] = None,
+    spec_mask: Optional[np.ndarray] = None,
+    sclera_v_min: float = 150.0,
+    sclera_s_max: float = 60.0,
+    min_keep_ratio: float = 0.18,
+) -> Tuple[np.ndarray, int]:
+    """生成可见虹膜环带，扣除黑边、巩膜/眼皮亮区和高光。"""
+    h, w = image_bgr.shape[:2]
+    yy, xx = np.indices((h, w))
+    dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+    base = (dist <= outer_r) & (dist >= inner_r)
+    if scope_mask is not None:
+        base &= scope_mask > 0
+
+    base_count = int(np.count_nonzero(base))
+    if base_count == 0:
+        return np.zeros((h, w), dtype=np.uint8), 0
+
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    s_channel = hsv[:, :, 1]
+    v_channel = hsv[:, :, 2]
+    base_v = v_channel[base]
+    v_median = float(np.median(base_v))
+    v_std = float(np.std(base_v))
+    v_limit = min(235.0, max(v_median + max(28.0, v_std * 1.15), float(np.percentile(base_v, 60))))
+
+    whitish = (v_channel >= sclera_v_min) & (s_channel <= sclera_s_max)
+    bright_skin_or_lid = (v_channel >= max(v_limit, sclera_v_min + 10.0)) & (s_channel <= 150)
+    highlight = v_channel >= 245
+    if spec_mask is not None:
+        highlight |= spec_mask > 0
+
+    visible = base & ~whitish & ~bright_skin_or_lid & ~highlight
+    visible_count = int(np.count_nonzero(visible))
+    if visible_count < base_count * min_keep_ratio:
+        visible = base & ~highlight
+        visible_count = int(np.count_nonzero(visible))
+
+    mask = np.zeros((h, w), dtype=np.uint8)
+    mask[visible] = 255
+    return mask, visible_count
+
+
 def build_refined_iris_ring(
     image_bgr: np.ndarray,
     pupil: PupilEstimate,
@@ -440,6 +534,9 @@ def build_refined_iris_ring(
     inner_iris_ratio: float = 0.35,
     outer_iris_ratio: float = 0.85,
     spec_mask: Optional[np.ndarray] = None,
+    scope_mask: Optional[np.ndarray] = None,
+    sclera_v_min: float = 150.0,
+    sclera_s_max: float = 60.0,
 ) -> IrisRingEstimate:
     """
     使用独立估计的虹膜外缘生成取色环带。
@@ -449,11 +546,14 @@ def build_refined_iris_ring(
     h, w = image_bgr.shape[:2]
     min_dim = min(h, w)
     luminance = _preprocess_luminance(image_bgr)
+    if scope_mask is None:
+        scope_mask = _detect_scope_mask(image_bgr)
     iris_outer_r, iris_outer_method, iris_confidence = _estimate_iris_outer_radius(
         luminance,
         pupil,
         outer_pupil_multiplier,
         spec_mask,
+        scope_mask,
     )
     iris_outer_r = float(np.clip(iris_outer_r, pupil.radius * 1.8, min_dim * 0.48))
 
@@ -464,11 +564,18 @@ def build_refined_iris_ring(
         inner_r = min(pupil.radius * inner_pupil_multiplier, iris_outer_r - 6)
         outer_r = iris_outer_r - 3
 
-    mask = np.zeros((h, w), dtype=np.uint8)
     cx, cy = pupil.center_x, pupil.center_y
-    cv2.circle(mask, (cx, cy), int(max(outer_r, 1)), 255, -1)
-    cv2.circle(mask, (cx, cy), int(max(inner_r, 1)), 0, -1)
-    sample_count = int(np.count_nonzero(mask))
+    mask, sample_count = _build_visible_iris_mask(
+        image_bgr,
+        float(cx),
+        float(cy),
+        inner_r,
+        outer_r,
+        scope_mask=scope_mask,
+        spec_mask=spec_mask,
+        sclera_v_min=sclera_v_min,
+        sclera_s_max=sclera_s_max,
+    )
     return IrisRingEstimate(
         mask=mask,
         outer_radius=float(outer_r),
@@ -516,12 +623,14 @@ def _estimate_pupil_in_disk(
     cy: float,
     iris_r: float,
     pupil_iris_ratio: float,
-) -> Tuple[float, bool]:
+    spec_mask: Optional[np.ndarray] = None,
+    scope_mask: Optional[np.ndarray] = None,
+) -> Tuple[float, float, float, bool]:
     """
     在黑盘内尝试找更暗的瞳孔核。
 
     深色融合眼里瞳孔与虹膜亮度几乎一致，找不到时按 pupil_iris_ratio 估算。
-    返回 (pupil_radius, estimated)。estimated=True 表示用比例兜底。
+    返回 (pupil_cx, pupil_cy, pupil_radius, estimated)。estimated=True 表示用比例兜底。
     """
     h, w = luminance.shape[:2]
     fallback = float(iris_r * pupil_iris_ratio)
@@ -532,23 +641,34 @@ def _estimate_pupil_in_disk(
     y2 = min(int(cy + r_search), h)
     roi = luminance[y1:y2, x1:x2]
     if roi.size == 0:
-        return fallback, True
+        return cx, cy, fallback, True
 
-    thr = float(np.percentile(roi, 15))
-    dark = (roi <= thr).astype(np.uint8) * 255
+    yy, xx = np.indices(roi.shape)
+    local_cx, local_cy = cx - x1, cy - y1
+    disk_roi = ((xx - local_cx) ** 2 + (yy - local_cy) ** 2) <= (iris_r * 0.72) ** 2
+    if scope_mask is not None:
+        disk_roi &= scope_mask[y1:y2, x1:x2] > 0
+    if spec_mask is not None:
+        disk_roi &= spec_mask[y1:y2, x1:x2] == 0
+
+    values = roi[disk_roi]
+    if values.size < 20:
+        return cx, cy, fallback, True
+
+    thr = float(np.percentile(values, 18))
+    dark = ((roi <= thr) & disk_roi).astype(np.uint8) * 255
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, kernel)
     dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, kernel)
 
     contours, _ = cv2.findContours(dark, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    local_cx, local_cy = cx - x1, cy - y1
     min_r = iris_r * 0.12
-    max_r = iris_r * 0.65
-    best_r = None
-    best_dist = float("inf")
+    max_r = iris_r * 0.58
+    best = None
+    best_score = -float("inf")
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < np.pi * min_r * min_r:
+        if area < np.pi * min_r * min_r * 0.55:
             continue
         (ex, ey), enclosing_r = cv2.minEnclosingCircle(cnt)
         if enclosing_r < min_r or enclosing_r > max_r:
@@ -557,16 +677,22 @@ def _estimate_pupil_in_disk(
         if perimeter <= 0:
             continue
         circularity = 4.0 * np.pi * area / (perimeter * perimeter)
-        if circularity < 0.5:
+        if circularity < 0.38:
             continue
-        dist = (ex - local_cx) ** 2 + (ey - local_cy) ** 2
-        if dist < best_dist:
-            best_dist = dist
-            best_r = float(enclosing_r)
+        contour_mask = np.zeros_like(roi, dtype=np.uint8)
+        cv2.drawContours(contour_mask, [cnt], -1, 255, -1)
+        mean_lum = float(cv2.mean(roi, mask=contour_mask)[0])
+        darkness = 1.0 - min(mean_lum / 255.0, 1.0)
+        dist_norm = ((ex - local_cx) ** 2 + (ey - local_cy) ** 2) ** 0.5 / max(iris_r, 1.0)
+        radius = float((enclosing_r + (area / np.pi) ** 0.5) / 2.0)
+        score = darkness * 1.6 + circularity * 0.9 - dist_norm * 1.3
+        if score > best_score:
+            best_score = score
+            best = (float(ex + x1), float(ey + y1), radius)
 
-    if best_r is not None:
-        return best_r, False
-    return fallback, True
+    if best is not None:
+        return best[0], best[1], best[2], False
+    return cx, cy, fallback, True
 
 
 def _inside_mean(luminance: np.ndarray, cx: float, cy: float, radius: float) -> float:
@@ -638,6 +764,7 @@ def detect_iris_disk(
     sclera_s_max: float = 60.0,
     sclera_bilateral_min: float = 0.0,
     target_min_dim: int = 700,
+    spec_mask: Optional[np.ndarray] = None,
 ) -> Optional[IrisDiskEstimate]:
     """
     黑盘直检：直接用 Hough 找虹膜/巩膜的圆形边界，再用「内暗外亮」验证。
@@ -658,6 +785,11 @@ def detect_iris_disk(
     )
     luminance = _preprocess_luminance(small)
     hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+    scope_mask = _detect_scope_mask(small)
+    if spec_mask is not None and spec_mask.shape[:2] != small.shape[:2]:
+        spec_mask = cv2.resize(
+            spec_mask, (small.shape[1], small.shape[0]), interpolation=cv2.INTER_NEAREST
+        )
     sh, sw = luminance.shape[:2]
     s_min_dim = min(sh, sw)
 
@@ -665,8 +797,8 @@ def detect_iris_disk(
     max_r = max(int(s_min_dim * max_radius_ratio), min_r + 1)
     blurred = cv2.medianBlur(luminance, 5)
 
-    # 多阈值收集候选并去重：严阈值给强边界，松阈值补遮挡/弱边界
-    # 强阈值（param2=30）一旦给出足够候选就提前短路，省掉松阈值扫描
+    # 多阈值收集候选并去重：严阈值给强边界，松阈值补遮挡/弱边界。
+    # 实拍遮挡下强阈值容易先命中眼皮/镜头边缘，仍需继续收集松阈值候选。
     candidates: dict = {}
     for param2 in (30, 22, 16):
         circles = cv2.HoughCircles(
@@ -684,8 +816,6 @@ def detect_iris_disk(
                 cx, cy, radius = float(circle[0]), float(circle[1]), float(circle[2])
                 key = (round(cx / 12), round(cy / 12), round(radius / 12))
                 candidates.setdefault(key, (cx, cy, radius))
-        if len(candidates) >= 2:
-            break
     if not candidates:
         return None
 
@@ -693,24 +823,31 @@ def detect_iris_disk(
     best = None
     best_score = -float("inf")
     for cx, cy, radius in candidates.values():
+        if _circle_scope_fraction(scope_mask, cx, cy, radius * 1.08) < 0.75:
+            continue
         inside = _inside_mean(luminance, cx, cy, radius)
         support, outside = _surround_stats(luminance, cx, cy, radius, inside, surround_contrast * 0.5)
         contrast = outside - inside
-        # 虹膜与巩膜的强反差是区分「眼睛」与「眉毛/睫毛/皮肤暗块」的关键：
-        # 眉毛被皮肤包围时反差≈0，虹膜被巩膜包围时反差很大。
-        if contrast < surround_contrast or support < surround_support_min:
-            continue
         # 偏白巩膜占比作为加分项（不作硬门槛，避免暗光巩膜被误杀）
         sclera = _sclera_fraction(hsv, cx, cy, radius, sclera_v_min, sclera_s_max)
         # 双侧巩膜合理性：眉毛/睫毛两侧都被皮肤包围、无白巩膜，可据此拒绝
         bilateral = _bilateral_sclera_fraction(hsv, cx, cy, radius, sclera_v_min, sclera_s_max)
+        # 虹膜与巩膜的强反差是区分「眼睛」与「眉毛/睫毛/皮肤暗块」的关键：
+        # 眉毛被皮肤包围时反差≈0，虹膜被巩膜包围时反差很大。
+        if support < surround_support_min:
+            continue
+        has_sclera_support = support >= max(surround_support_min, 0.55) and (
+            sclera >= max(sclera_min, 0.22) or bilateral >= 0.15
+        )
+        if contrast < surround_contrast and not has_sclera_support:
+            continue
         if sclera_bilateral_min > 0.0 and bilateral < sclera_bilateral_min:
             continue
 
         darkness = 1.0 - min(inside / 255.0, 1.0)
         dist_norm = ((cx - img_cx) ** 2 + (cy - img_cy) ** 2) ** 0.5 / max(sw, sh)
         score = (
-            min(contrast / 80.0, 1.0) * 2.2
+            min(max(contrast, 0.0) / 80.0, 1.0) * 2.2
             + support * 1.2
             + darkness * 0.8
             + sclera * 0.8
@@ -725,11 +862,21 @@ def detect_iris_disk(
         return None
 
     cx, cy, iris_r, support, sclera = best
-    pupil_r, estimated = _estimate_pupil_in_disk(luminance, cx, cy, iris_r, pupil_iris_ratio)
+    pupil_cx, pupil_cy, pupil_r, estimated = _estimate_pupil_in_disk(
+        luminance,
+        cx,
+        cy,
+        iris_r,
+        pupil_iris_ratio,
+        spec_mask=spec_mask,
+        scope_mask=scope_mask,
+    )
 
     inv = 1.0 / scale
     cx_full = cx * inv
     cy_full = cy * inv
+    pupil_cx_full = pupil_cx * inv
+    pupil_cy_full = pupil_cy * inv
     iris_r_full = iris_r * inv
     pupil_r_full = pupil_r * inv
     confidence = float(np.clip(0.30 + support * 0.35 + sclera * 0.6, 0.30, 0.95))
@@ -745,6 +892,8 @@ def detect_iris_disk(
         confidence=confidence,
         method="iris_disk",
         pupil_estimated=estimated,
+        pupil_center_x=int(pupil_cx_full),
+        pupil_center_y=int(pupil_cy_full),
         candidate_mask=candidate_mask,
     )
 
@@ -754,6 +903,11 @@ def build_ring_from_disk(
     disk: IrisDiskEstimate,
     inner_iris_ratio: float = 0.40,
     outer_iris_ratio: float = 0.85,
+    image_bgr: Optional[np.ndarray] = None,
+    scope_mask: Optional[np.ndarray] = None,
+    spec_mask: Optional[np.ndarray] = None,
+    sclera_v_min: float = 150.0,
+    sclera_s_max: float = 60.0,
 ) -> IrisRingEstimate:
     """以黑盘直检结果生成取色环带：内缘扣掉瞳孔，外缘留在虹膜中段。"""
     h, w = image_shape[:2]
@@ -766,11 +920,26 @@ def build_ring_from_disk(
         inner_r = min(disk.pupil_radius * 1.08, iris_outer_r - 6)
         outer_r = iris_outer_r - 3
 
-    mask = np.zeros((h, w), dtype=np.uint8)
     cx, cy = disk.center_x, disk.center_y
-    cv2.circle(mask, (cx, cy), int(max(outer_r, 1)), 255, -1)
-    cv2.circle(mask, (cx, cy), int(max(inner_r, 1)), 0, -1)
-    sample_count = int(np.count_nonzero(mask))
+    if image_bgr is not None:
+        if scope_mask is None:
+            scope_mask = _detect_scope_mask(image_bgr)
+        mask, sample_count = _build_visible_iris_mask(
+            image_bgr,
+            float(cx),
+            float(cy),
+            inner_r,
+            outer_r,
+            scope_mask=scope_mask,
+            spec_mask=spec_mask,
+            sclera_v_min=sclera_v_min,
+            sclera_s_max=sclera_s_max,
+        )
+    else:
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.circle(mask, (cx, cy), int(max(outer_r, 1)), 255, -1)
+        cv2.circle(mask, (cx, cy), int(max(inner_r, 1)), 0, -1)
+        sample_count = int(np.count_nonzero(mask))
     return IrisRingEstimate(
         mask=mask,
         outer_radius=float(outer_r),

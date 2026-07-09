@@ -33,14 +33,14 @@ eye_closeup:
   outer_iris_ratio: 0.85
 
   # 性能：定位统一降采样到此最短边（<=此值的图不缩放，结果会缩放回全分辨率）
-  detect_target_min_dim: 900
+  detect_target_min_dim: 700
   # 性能：CIELAB 取色的有效像素上限，超过则固定种子随机抽样（中位数稳健）；0=不限
   color_sample_cap: 20000
 
   # 眼部先验（MediaPipe FaceLandmarker）：仅用于「抢救」疑似眉毛误检的全帧结果。
   # 全帧结果是黑盘且左右两侧白色巩膜占比都低于 eyebrow_suspect_sclera_min 时，
   # 用先验裁 ROI 重定位；抢救结果须自身双侧有更多巩膜才替换。模型缺失/无脸自动回退。
-  use_landmark_prior: true
+  use_landmark_prior: false
   landmark_roi_margin: 3.0
   eyebrow_suspect_sclera_min: 0.06
   # 全帧中心偏离先验虹膜中心超过此倍数虹膜半径时，判定疑似锁在眉毛/睫毛上并触发 ROI 抢救
@@ -64,9 +64,9 @@ eye_closeup:
   disk:
     dark_percentile: 35.0
     min_radius_ratio: 0.10
-    max_radius_ratio: 0.45
+    max_radius_ratio: 0.50
     circularity_min: 0.55
-    surround_contrast: 22.0     # 外侧(巩膜)需比盘内(虹膜)平均亮多少；区分虹膜与眉毛的关键
+    surround_contrast: 6.0      # 当前实拍有雾化/反光，虹膜到巩膜的平均亮度差不宜设得过高
     surround_support_min: 0.45  # 满足反差的角度比例下限
     sclera_min: 0.10            # 偏白巩膜占比（仅作加分项，不再硬门槛）
     sclera_v_min: 150.0         # 巩膜判定：亮度高于此值

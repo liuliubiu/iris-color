@@ -95,7 +95,8 @@ def _scale_detection_to_full(
     full_cx, full_cy = int(round(cx * inv)), int(round(cy * inv))
     inner_r = _s(result.inner_radius) or 0.0
     outer_r = _s(result.outer_radius) or _s(result.radius) or 1.0
-    mask, sample_count = _ring_mask(full_shape, full_cx, full_cy, inner_r, outer_r)
+    mask = cv2.resize(result.mask, (w, h), interpolation=cv2.INTER_NEAREST)
+    sample_count = int(np.count_nonzero(mask))
 
     pupil_center = None
     if result.pupil_center is not None:
@@ -306,6 +307,8 @@ def _detect_precise(
         inner_iris_ratio=eye_cfg.get("inner_iris_ratio", 0.35),
         outer_iris_ratio=eye_cfg.get("outer_iris_ratio", 0.85),
         spec_mask=spec_mask,
+        sclera_v_min=eye_cfg.get("disk", {}).get("sclera_v_min", 150.0),
+        sclera_s_max=eye_cfg.get("disk", {}).get("sclera_s_max", 60.0),
     )
     return IrisDetectionResult(
         mask=ring.mask,
@@ -331,6 +334,7 @@ def _detect_rough(
     detect_image: np.ndarray,
     full_shape: Tuple[int, int],
     eye_cfg: dict,
+    spec_mask: Optional[np.ndarray] = None,
 ) -> Optional[IrisDetectionResult]:
     """阶段B：黑盘直检（适合瞳孔与虹膜融成一团黑的实拍图）。"""
     disk_cfg = eye_cfg.get("disk", {})
@@ -348,6 +352,7 @@ def _detect_rough(
         sclera_s_max=disk_cfg.get("sclera_s_max", 60.0),
         sclera_bilateral_min=disk_cfg.get("sclera_bilateral_min", 0.0),
         target_min_dim=int(disk_cfg.get("target_min_dim", 700)),
+        spec_mask=spec_mask,
     )
     if disk is None:
         return None
@@ -357,8 +362,17 @@ def _detect_rough(
         disk,
         inner_iris_ratio=disk_cfg.get("inner_iris_ratio", 0.40),
         outer_iris_ratio=disk_cfg.get("outer_iris_ratio", 0.85),
+        image_bgr=detect_image,
+        spec_mask=spec_mask,
+        sclera_v_min=disk_cfg.get("sclera_v_min", 150.0),
+        sclera_s_max=disk_cfg.get("sclera_s_max", 60.0),
     )
     pupil_method = "iris_disk_estimated" if disk.pupil_estimated else "iris_disk_core"
+    pupil_center = (
+        (disk.pupil_center_x, disk.pupil_center_y)
+        if disk.pupil_center_x is not None and disk.pupil_center_y is not None
+        else (disk.center_x, disk.center_y)
+    )
     return IrisDetectionResult(
         mask=ring.mask,
         center=(disk.center_x, disk.center_y),
@@ -366,7 +380,7 @@ def _detect_rough(
         eye_side="closeup",
         sample_pixel_count=ring.sample_pixel_count,
         method="eye_closeup_disk",
-        pupil_center=(disk.center_x, disk.center_y),
+        pupil_center=pupil_center,
         pupil_radius=disk.pupil_radius,
         inner_radius=ring.inner_radius,
         outer_radius=ring.outer_radius,
@@ -425,21 +439,25 @@ def _detect_modes_core(
     if mode == "precise":
         return _detect_precise(img, shape, eye_cfg, spec_mask)
     if mode == "rough":
-        return _detect_rough(img, shape, eye_cfg)
+        return _detect_rough(img, shape, eye_cfg, spec_mask)
 
     # auto
     if prefer_disk:
-        rough = _detect_rough(img, shape, eye_cfg)
+        rough = _detect_rough(img, shape, eye_cfg, spec_mask)
         if rough is not None and rough.sample_pixel_count > 0:
             return rough
-        return _detect_precise(img, shape, eye_cfg, spec_mask)
+        precise = _detect_precise(img, shape, eye_cfg, spec_mask)
+        min_confidence = eye_cfg.get("auto_precise_min_confidence", 0.5)
+        if precise is not None and _precise_acceptable(precise, min_confidence):
+            return precise
+        return None
 
     min_confidence = eye_cfg.get("auto_precise_min_confidence", 0.5)
     precise = _detect_precise(img, shape, eye_cfg, spec_mask)
     if precise is not None and _precise_acceptable(precise, min_confidence):
         return precise
 
-    rough = _detect_rough(img, shape, eye_cfg)
+    rough = _detect_rough(img, shape, eye_cfg, spec_mask)
     if rough is not None:
         return rough
     return precise
@@ -538,6 +556,8 @@ def _detect_from_eye_closeup(
     # 经降采样的大图（实拍照片）优先黑盘直检；小清晰图沿用精定位优先
     prefer_disk = scale < 1.0
     result = _run_modes(detect_image, detect_spec, prior, eye_cfg, mode, prefer_disk)
+    if result is None and detect_image is not small:
+        result = _run_modes(small, None, prior, eye_cfg, mode, prefer_disk)
     return _scale_detection_to_full(result, inv, image_bgr.shape)
 
 
