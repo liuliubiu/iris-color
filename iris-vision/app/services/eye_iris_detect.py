@@ -8,6 +8,17 @@ import numpy as np
 
 
 @dataclass
+class CircularFovCrop:
+    """圆形光圈有效视野裁剪结果。"""
+
+    image: np.ndarray
+    offset_x: int
+    offset_y: int
+    applied: bool
+    coverage: float  # 非黑有效区占原图比例
+
+
+@dataclass
 class PupilEstimate:
     """瞳孔估计结果。"""
 
@@ -44,6 +55,51 @@ class IrisDiskEstimate:
     method: str = "iris_disk"
     pupil_estimated: bool = True
     candidate_mask: Optional[np.ndarray] = None
+
+
+def crop_circular_fov(
+    image_bgr: np.ndarray,
+    *,
+    luminance_threshold: int = 12,
+    min_coverage: float = 0.15,
+    max_coverage: float = 0.92,
+    margin_ratio: float = 0.02,
+) -> CircularFovCrop:
+    """
+    裁掉圆形光圈外的大面积黑边，返回有效视野 bbox。
+
+    实拍特写常见四角纯黑；裁剪后半径比例/Hough/暗区搜索都基于真眼区，
+    同时减少后续降采样与反光处理的工作像素。非圆形光圈或有效区过大/过小时原样返回。
+    """
+    h, w = image_bgr.shape[:2]
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    fg = (gray > luminance_threshold).astype(np.uint8) * 255
+    coverage = float(np.mean(fg > 0))
+    if coverage < min_coverage or coverage > max_coverage:
+        return CircularFovCrop(image_bgr, 0, 0, False, coverage)
+
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(fg, connectivity=8)
+    if num <= 1:
+        return CircularFovCrop(image_bgr, 0, 0, False, coverage)
+
+    best_i = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    x = int(stats[best_i, cv2.CC_STAT_LEFT])
+    y = int(stats[best_i, cv2.CC_STAT_TOP])
+    bw = int(stats[best_i, cv2.CC_STAT_WIDTH])
+    bh = int(stats[best_i, cv2.CC_STAT_HEIGHT])
+    if bw < 32 or bh < 32:
+        return CircularFovCrop(image_bgr, 0, 0, False, coverage)
+
+    margin = int(max(margin_ratio * min(h, w), 2))
+    x1 = max(x - margin, 0)
+    y1 = max(y - margin, 0)
+    x2 = min(x + bw + margin, w)
+    y2 = min(y + bh + margin, h)
+    if (x2 - x1) >= w * 0.98 and (y2 - y1) >= h * 0.98:
+        return CircularFovCrop(image_bgr, 0, 0, False, coverage)
+
+    cropped = image_bgr[y1:y2, x1:x2]
+    return CircularFovCrop(cropped, x1, y1, True, coverage)
 
 
 def suppress_specular(
@@ -264,12 +320,21 @@ def _smooth_profile(values: np.ndarray, window: int = 7) -> np.ndarray:
     return np.convolve(padded, kernel, mode="valid")
 
 
+def _is_horizontal_sector(angle_rad: float) -> bool:
+    """水平扇区（左右巩膜侧），避开上下眼睑遮挡方向。"""
+    deg = float(np.rad2deg(angle_rad) % 360.0)
+    return (deg <= 45.0 or deg >= 315.0) or (135.0 <= deg <= 225.0)
+
+
 def _refine_pupil_boundary(
     luminance: np.ndarray,
     pupil: PupilEstimate,
     spec_mask: Optional[np.ndarray] = None,
 ) -> PupilEstimate:
-    """沿射线寻找瞳孔黑区到虹膜的亮度上升边界。"""
+    """沿射线寻找瞳孔黑区到虹膜的亮度上升边界。
+
+    优先使用水平扇区（与虹膜外缘估计一致），降低上睑/睫毛把瞳孔半径估小的风险。
+    """
     h, w = luminance.shape[:2]
     min_dim = min(h, w)
     cx, cy = float(pupil.center_x), float(pupil.center_y)
@@ -283,6 +348,9 @@ def _refine_pupil_boundary(
     radial_samples = np.linspace(start_r, end_r, 90)
 
     for angle in angles:
+        # 上下扇区跳过：上睑遮挡会在错误半径制造亮度跃升
+        if not _is_horizontal_sector(angle):
+            continue
         xs = cx + np.cos(angle) * radial_samples
         ys = cy + np.sin(angle) * radial_samples
         # 反光会在瞳孔亮环处制造假的亮度跃升，污染严重的射线直接跳过
@@ -297,7 +365,8 @@ def _refine_pupil_boundary(
             continue
         radii.append(float(radial_samples[idx]))
 
-    if len(radii) < 18:
+    # 水平扇区约一半射线，相应降低 inlier 门槛
+    if len(radii) < 10:
         pupil.method = f"{pupil.method}+unrefined"
         return pupil
 
@@ -305,14 +374,14 @@ def _refine_pupil_boundary(
     median = float(np.median(radii_arr))
     mad = float(np.median(np.abs(radii_arr - median))) or 1.0
     inliers = radii_arr[np.abs(radii_arr - median) <= 2.5 * mad]
-    if len(inliers) < 12:
+    if len(inliers) < 7:
         return pupil
 
     refined_radius = float(np.median(inliers))
     if refined_radius < min_dim * 0.02 or refined_radius > min_dim * 0.22:
         return pupil
 
-    support = len(inliers) / len(angles)
+    support = len(inliers) / max(len(radii), 1)
     confidence = max(pupil.confidence, float(np.clip(0.45 + support * 0.55, 0.45, 0.98)))
     return PupilEstimate(
         center_x=pupil.center_x,
@@ -665,9 +734,11 @@ def detect_iris_disk(
     max_r = max(int(s_min_dim * max_radius_ratio), min_r + 1)
     blurred = cv2.medianBlur(luminance, 5)
 
-    # 多阈值收集候选并去重：严阈值给强边界，松阈值补遮挡/弱边界
-    # 强阈值（param2=30）一旦给出足够候选就提前短路，省掉松阈值扫描
+    # 多阈值收集候选并去重：严阈值给强边界，松阈值补遮挡/弱边界。
+    # 仅当已有「通过内暗外亮验证」的候选时才提前短路，避免大 maxRadius 下
+    # 严阈值假圆占满候选集、漏掉真虹膜。
     candidates: dict = {}
+    validated: list = []
     for param2 in (30, 22, 16):
         circles = cv2.HoughCircles(
             blurred,
@@ -683,8 +754,17 @@ def detect_iris_disk(
             for circle in circles[0]:
                 cx, cy, radius = float(circle[0]), float(circle[1]), float(circle[2])
                 key = (round(cx / 12), round(cy / 12), round(radius / 12))
-                candidates.setdefault(key, (cx, cy, radius))
-        if len(candidates) >= 2:
+                if key in candidates:
+                    continue
+                candidates[key] = (cx, cy, radius)
+                inside = _inside_mean(luminance, cx, cy, radius)
+                support, outside = _surround_stats(
+                    luminance, cx, cy, radius, inside, surround_contrast * 0.5
+                )
+                contrast = outside - inside
+                if contrast >= surround_contrast and support >= surround_support_min:
+                    validated.append((cx, cy, radius, support, inside, outside, contrast))
+        if len(validated) >= 2:
             break
     if not candidates:
         return None
@@ -692,14 +772,20 @@ def detect_iris_disk(
     img_cx, img_cy = sw / 2.0, sh / 2.0
     best = None
     best_score = -float("inf")
-    for cx, cy, radius in candidates.values():
-        inside = _inside_mean(luminance, cx, cy, radius)
-        support, outside = _surround_stats(luminance, cx, cy, radius, inside, surround_contrast * 0.5)
-        contrast = outside - inside
-        # 虹膜与巩膜的强反差是区分「眼睛」与「眉毛/睫毛/皮肤暗块」的关键：
-        # 眉毛被皮肤包围时反差≈0，虹膜被巩膜包围时反差很大。
-        if contrast < surround_contrast or support < surround_support_min:
-            continue
+    # 优先在已验证集合上打分；若严阈值未验证到，再扫全部候选
+    pool = validated if validated else []
+    if not pool:
+        for cx, cy, radius in candidates.values():
+            inside = _inside_mean(luminance, cx, cy, radius)
+            support, outside = _surround_stats(
+                luminance, cx, cy, radius, inside, surround_contrast * 0.5
+            )
+            contrast = outside - inside
+            if contrast < surround_contrast or support < surround_support_min:
+                continue
+            pool.append((cx, cy, radius, support, inside, outside, contrast))
+
+    for cx, cy, radius, support, inside, outside, contrast in pool:
         # 偏白巩膜占比作为加分项（不作硬门槛，避免暗光巩膜被误杀）
         sclera = _sclera_fraction(hsv, cx, cy, radius, sclera_v_min, sclera_s_max)
         # 双侧巩膜合理性：眉毛/睫毛两侧都被皮肤包围、无白巩膜，可据此拒绝

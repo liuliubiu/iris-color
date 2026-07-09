@@ -10,12 +10,14 @@ from app.services.eye_iris_detect import (
     _bilateral_sclera_fraction,
     build_refined_iris_ring,
     build_ring_from_disk,
+    crop_circular_fov,
     detect_iris_disk,
     detect_pupil,
     suppress_specular,
 )
 from app.services.eye_roi import EyePrior, detect_eye_prior
 from app.services.face_landmarker import detect_face_landmarks
+from app.services.quality import compute_blur_score
 
 _LEFT_IRIS_CENTER = 468
 _RIGHT_IRIS_CENTER = 473
@@ -502,7 +504,8 @@ def _detect_from_eye_closeup(
     mode: str = "auto",
 ) -> Optional[IrisDetectionResult]:
     """
-    眼部特写模式：统一降采样 → 镜面反光修复 → 眼部先验 ROI → 两阶段定位，最后缩放回全分辨率。
+    眼部特写模式：圆形 FOV 裁剪 → 降采样 → 镜面反光修复 → 眼部先验 ROI → 两阶段定位，
+    最后缩放并平移回全分辨率。
 
     mode:
       - auto: 精定位置信度达标用 A，否则回退黑盘直检 B
@@ -510,8 +513,25 @@ def _detect_from_eye_closeup(
       - rough: 强制阶段B（实拍黑盘直检）
     眼部先验（MediaPipe）缺席时优雅回退到纯几何启发式。
     """
-    target = int(eye_cfg.get("detect_target_min_dim", 900))
-    small, scale = _downscale_for_detection(image_bgr, target)
+    fov_cfg = eye_cfg.get("circular_fov", {})
+    work = image_bgr
+    fov_ox, fov_oy = 0, 0
+    fov_applied = False
+    if fov_cfg.get("enabled", True):
+        fov = crop_circular_fov(
+            image_bgr,
+            luminance_threshold=int(fov_cfg.get("luminance_threshold", 12)),
+            min_coverage=float(fov_cfg.get("min_coverage", 0.15)),
+            max_coverage=float(fov_cfg.get("max_coverage", 0.92)),
+            margin_ratio=float(fov_cfg.get("margin_ratio", 0.02)),
+        )
+        if fov.applied:
+            work = fov.image
+            fov_ox, fov_oy = fov.offset_x, fov.offset_y
+            fov_applied = True
+
+    target = int(eye_cfg.get("detect_target_min_dim", 800))
+    small, scale = _downscale_for_detection(work, target)
     inv = 1.0 / scale
 
     specular_cfg = eye_cfg.get("specular", {})
@@ -520,25 +540,61 @@ def _detect_from_eye_closeup(
             small,
             v_threshold=specular_cfg.get("v_threshold", 230),
             sat_threshold=specular_cfg.get("sat_threshold", 90),
-            max_area_ratio=specular_cfg.get("max_area_ratio", 0.04),
+            max_area_ratio=specular_cfg.get("max_area_ratio", 0.08),
             dilate_px=specular_cfg.get("dilate_px", 3),
         )
     else:
         detect_image, spec_mask = small, None
 
-    # 反光跳过默认关闭：经回归会扰动清晰小图（误把高光当反光），且对实测反光图无增益
-    detect_spec = spec_mask if specular_cfg.get("skip_rays", False) else None
+    # 有反光 mask 时才跳过污染射线；无反光时保持关闭，避免清晰小图误伤
+    skip_rays_cfg = specular_cfg.get("skip_rays", "when_present")
+    if skip_rays_cfg is True:
+        detect_spec = spec_mask
+    elif skip_rays_cfg is False:
+        detect_spec = None
+    else:
+        # when_present（默认）：仅当检出反光时启用
+        has_spec = spec_mask is not None and bool(np.any(spec_mask))
+        detect_spec = spec_mask if has_spec else None
 
     prior = None
-    if eye_cfg.get("use_landmark_prior", True):
+    if eye_cfg.get("use_landmark_prior", False):
         prior = detect_eye_prior(
             detect_image, float(eye_cfg.get("landmark_roi_margin", 3.0))
         )
 
-    # 经降采样的大图（实拍照片）优先黑盘直检；小清晰图沿用精定位优先
+    # 经降采样的大图（实拍照片）优先黑盘直检。
+    # 圆形 FOV 裁剪后的实拍特写：强制 disk 并放宽门槛（裁剪后 blur 分数偏高，不宜用软阈值）。
+    # 未裁剪的清晰小图：仅当 blur 明显偏低时才放宽，避免误伤精定位。
     prefer_disk = scale < 1.0
-    result = _run_modes(detect_image, detect_spec, prior, eye_cfg, mode, prefer_disk)
-    return _scale_detection_to_full(result, inv, image_bgr.shape)
+    run_cfg = eye_cfg
+    soft_blur = float(eye_cfg.get("soft_blur_threshold", 20.0))
+    need_relaxed_disk = False
+    if mode == "auto":
+        if fov_applied:
+            need_relaxed_disk = True
+        elif soft_blur > 0 and compute_blur_score(detect_image) < soft_blur:
+            need_relaxed_disk = True
+    if need_relaxed_disk:
+        prefer_disk = True
+        disk_cfg = dict(eye_cfg.get("disk", {}))
+        # FOV 裁剪后虹膜占画幅更大：略抬半径上限到 0.50，并放宽反差；更高上限易触发 Hough 短路漏检
+        disk_cfg["surround_contrast"] = min(
+            float(disk_cfg.get("surround_contrast", 22.0)), 12.0
+        )
+        disk_cfg["surround_support_min"] = min(
+            float(disk_cfg.get("surround_support_min", 0.45)), 0.30
+        )
+        disk_cfg["max_radius_ratio"] = max(
+            float(disk_cfg.get("max_radius_ratio", 0.45)), 0.50
+        )
+        run_cfg = {**eye_cfg, "disk": disk_cfg}
+
+    result = _run_modes(detect_image, detect_spec, prior, run_cfg, mode, prefer_disk)
+    result = _scale_detection_to_full(result, inv, work.shape)
+    if result is not None and fov_applied:
+        result = _offset_detection(result, fov_ox, fov_oy, image_bgr.shape)
+    return result
 
 
 def detect_iris_ring_mask(

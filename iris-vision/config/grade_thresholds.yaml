@@ -25,22 +25,37 @@ detection:
 
 # 眼部特写：瞳孔 → 虹膜环带（相对瞳孔半径的倍数）
 eye_closeup:
-  center_roi_ratio: 0.85                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+  center_roi_ratio: 0.85
   pupil_dark_percentile: 12.0
-  inner_pupil_multiplier: 1.15  
+  inner_pupil_multiplier: 1.15
   outer_pupil_multiplier: 2.8
   inner_iris_ratio: 0.35
   outer_iris_ratio: 0.85
 
   # 性能：定位统一降采样到此最短边（<=此值的图不缩放，结果会缩放回全分辨率）
-  detect_target_min_dim: 900
+  # 圆形 FOV 裁剪后虹膜已占满视野，800 足够
+  detect_target_min_dim: 800
   # 性能：CIELAB 取色的有效像素上限，超过则固定种子随机抽样（中位数稳健）；0=不限
   color_sample_cap: 20000
 
-  # 眼部先验（MediaPipe FaceLandmarker）：仅用于「抢救」疑似眉毛误检的全帧结果。
-  # 全帧结果是黑盘且左右两侧白色巩膜占比都低于 eyebrow_suspect_sclera_min 时，
-  # 用先验裁 ROI 重定位；抢救结果须自身双侧有更多巩膜才替换。模型缺失/无脸自动回退。
-  use_landmark_prior: true
+  # 圆形光圈黑边裁剪：实拍特写四角纯黑，先裁再定位，提升半径比例准确性并省算力
+  circular_fov:
+    enabled: true
+    luminance_threshold: 12
+    min_coverage: 0.15
+    max_coverage: 0.70
+    margin_ratio: 0.02
+
+  # 上睑遮挡：取色时剔除上扇区，减轻眼皮/睫毛污染 Lab
+  occlusion:
+    exclude_upper_deg: 60   # 相对正上方左右各半角；0=关闭
+
+  # 未做 FOV 裁剪时：blur 低于此值则 auto 强制放宽 disk（清晰小图通常远高于此）
+  soft_blur_threshold: 20.0
+
+  # 眼部先验（MediaPipe FaceLandmarker）：特写圆光圈图通常无完整人脸，默认关闭以省算力。
+  # 全脸/眉毛误检场景可改回 true。
+  use_landmark_prior: false
   landmark_roi_margin: 3.0
   eyebrow_suspect_sclera_min: 0.06
   # 全帧中心偏离先验虹膜中心超过此倍数虹膜半径时，判定疑似锁在眉毛/睫毛上并触发 ROI 抢救
@@ -56,15 +71,16 @@ eye_closeup:
     enabled: true
     v_threshold: 230      # 亮度高于此值视为高光候选
     sat_threshold: 90     # 且饱和度低于此值才算镜面反光
-    max_area_ratio: 0.04  # 单个亮斑面积占比上限，超过视为巩膜/皮肤不修复
+    max_area_ratio: 0.08  # 相对裁剪后画幅；覆盖窗格大块反光
     dilate_px: 3
-    skip_rays: false      # 径向剖面是否跳过反光像素；默认关闭（会扰动清晰小图、对实测反光图无增益）
+    # when_present: 仅当检出反光 mask 时跳过污染射线；true/false 强制开/关
+    skip_rays: when_present
 
   # 黑盘直检（实拍粗略模式核心）
   disk:
     dark_percentile: 35.0
     min_radius_ratio: 0.10
-    max_radius_ratio: 0.45
+    max_radius_ratio: 0.48      # FOV 裁剪后虹膜占画幅更大；过高会让 Hough 严阈值短路漏检
     circularity_min: 0.55
     surround_contrast: 22.0     # 外侧(巩膜)需比盘内(虹膜)平均亮多少；区分虹膜与眉毛的关键
     surround_support_min: 0.45  # 满足反差的角度比例下限

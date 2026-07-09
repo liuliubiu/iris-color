@@ -1,7 +1,7 @@
 """取色与高光剔除（含调试用 mask）。"""
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import colorspacious
 import cv2
@@ -72,15 +72,51 @@ _DEPTH_LABEL_PREFIX = {
 }
 
 
+def exclude_upper_sector(
+    mask: np.ndarray,
+    center: Tuple[float, float],
+    exclude_upper_deg: float = 60.0,
+) -> np.ndarray:
+    """
+    从环带 mask 中剔除上扇区（眼睑/睫毛常遮挡区）。
+
+    exclude_upper_deg: 相对正上方（-90°）左右各半角；60 → 上 60°–120°（图像坐标 y 向下）。
+    返回新的 uint8 mask（0/255）。
+    """
+    if exclude_upper_deg <= 0 or mask is None:
+        return mask
+    h, w = mask.shape[:2]
+    cx, cy = float(center[0]), float(center[1])
+    ys, xs = np.mgrid[0:h, 0:w]
+    # OpenCV 图像坐标：0° 向右，逆时针；正上方约 -90° / 270°
+    angles = np.rad2deg(np.arctan2(ys - cy, xs - cx))
+    # 上扇区：约 -90±half → [-150, -30] 或等价区间
+    half = float(exclude_upper_deg)
+    upper = (angles >= (-90.0 - half)) & (angles <= (-90.0 + half))
+    out = mask.copy()
+    out[upper] = 0
+    return out
+
+
 def compute_sampling_masks(
     image_bgr: np.ndarray,
     mask: np.ndarray,
     highlight_v_threshold: int = 240,
+    *,
+    center: Optional[Tuple[float, float]] = None,
+    exclude_upper_deg: float = 0.0,
 ) -> SamplingMasks:
-    """计算环带、环内高光/极暗/过亮像素、最终有效采样区域。"""
+    """计算环带、环内高光/极暗/过亮像素、最终有效采样区域。
+
+    exclude_upper_deg > 0 且提供 center 时，先剔除上扇区再取色，减轻眼皮/睫毛污染。
+    """
+    work_mask = mask
+    if exclude_upper_deg > 0 and center is not None:
+        work_mask = exclude_upper_sector(mask, center, exclude_upper_deg)
+
     hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
     v_channel = hsv[:, :, 2]
-    ring = mask > 0
+    ring = work_mask > 0
     highlight_in_ring = ring & (v_channel >= highlight_v_threshold)
     dark_in_ring = ring & (v_channel <= 8)
     bright_cutoff = max(min(highlight_v_threshold - 15, 235), 220)
@@ -100,13 +136,22 @@ def extract_iris_lab_median(
     mask: np.ndarray,
     highlight_v_threshold: int = 240,
     sample_cap: int = 0,
+    *,
+    center: Optional[Tuple[float, float]] = None,
+    exclude_upper_deg: float = 0.0,
 ) -> LabResult:
     """在 mask 区域内取色，剔除高光，返回 CIELAB 中位数。
 
     sample_cap > 0 且有效像素超过该上限时，固定随机种子抽样后再做 CIELAB 转换：
     中位数对抽样稳健，大图可省去十几万像素的 colorspacious 转换，显著提速。
     """
-    masks = compute_sampling_masks(image_bgr, mask, highlight_v_threshold)
+    masks = compute_sampling_masks(
+        image_bgr,
+        mask,
+        highlight_v_threshold,
+        center=center,
+        exclude_upper_deg=exclude_upper_deg,
+    )
     pixels_bgr = image_bgr[masks.valid]
 
     total = len(pixels_bgr)

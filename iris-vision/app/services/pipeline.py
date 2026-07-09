@@ -62,6 +62,8 @@ def run_analysis(
     eye_closeup_cfg = config.get("eye_closeup", {})
     highlight_v = config.get("highlight_v_threshold", 240)
     detection_mode = detection_cfg.get("mode", "eye_closeup")
+    occlusion_cfg = eye_closeup_cfg.get("occlusion", {})
+    exclude_upper_deg = float(occlusion_cfg.get("exclude_upper_deg", 60.0))
 
     quality = check_quality(
         image_bgr,
@@ -91,12 +93,25 @@ def run_analysis(
     if detection.sample_pixel_count < min_pixels:
         raise AnalysisError("insufficient_iris_samples", quality)
 
-    sampling = compute_sampling_masks(image_bgr, detection.mask, highlight_v)
+    sampling = compute_sampling_masks(
+        image_bgr,
+        detection.mask,
+        highlight_v,
+        center=detection.center,
+        exclude_upper_deg=exclude_upper_deg,
+    )
     if int(sampling.valid.sum()) < min_pixels:
         raise AnalysisError("no_valid_pixels_after_highlight_removal", quality)
 
     color_sample_cap = int(eye_closeup_cfg.get("color_sample_cap", 20000))
-    lab = extract_iris_lab_median(image_bgr, detection.mask, highlight_v, sample_cap=color_sample_cap)
+    lab = extract_iris_lab_median(
+        image_bgr,
+        detection.mask,
+        highlight_v,
+        sample_cap=color_sample_cap,
+        center=detection.center,
+        exclude_upper_deg=exclude_upper_deg,
+    )
     grade = grade_from_l_star(lab.L, config_path)
     iris_color = classify_iris_color(lab, config)
 
