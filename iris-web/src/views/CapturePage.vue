@@ -415,12 +415,13 @@ function resetCropRenderCache() {
 }
 
 function defaultCropRect(width: number, height: number): CropRect {
-  const size = Math.min(width, height) * 0.72
+  // 左右拉满图片宽度；高度仍按短边 90% 居中，预留镜筒/眼周并裁掉上下边缘
+  const boxHeight = Math.min(width, height) * 0.9
   return {
-    x: (width - size) / 2,
-    y: (height - size) / 2,
-    width: size,
-    height: size,
+    x: 0,
+    y: (height - boxHeight) / 2,
+    width,
+    height: boxHeight,
   }
 }
 
@@ -458,12 +459,11 @@ function normalizeCropRect() {
   if (!canvas) return
   const minSize = Math.max(80, Math.min(canvas.width, canvas.height) * 0.12)
   let { x, y, width, height } = cropRect.value
-  width = Math.max(minSize, width)
-  height = Math.max(minSize, height)
-  x = Math.max(0, Math.min(x, canvas.width - minSize))
-  y = Math.max(0, Math.min(y, canvas.height - minSize))
-  if (x + width > canvas.width) x = canvas.width - width
-  if (y + height > canvas.height) y = canvas.height - height
+  // 必须先钳制宽高，再钳制原点；否则超画布时 x/y 会变负，导出 JPEG 出现左上黑边、主体右下偏移
+  width = Math.max(minSize, Math.min(width, canvas.width))
+  height = Math.max(minSize, Math.min(height, canvas.height))
+  x = Math.max(0, Math.min(x, canvas.width - width))
+  y = Math.max(0, Math.min(y, canvas.height - height))
   cropRect.value = { x, y, width, height }
 }
 
@@ -592,11 +592,18 @@ function onCropPointerEnd(event: PointerEvent) {
 
 async function applyCropAndAnalyze() {
   if (!cropImage) return
+  normalizeCropRect()
   const inv = 1 / cropDisplayScale
-  const sx = Math.round(cropRect.value.x * inv)
-  const sy = Math.round(cropRect.value.y * inv)
-  const w = Math.max(1, Math.round(cropRect.value.width * inv))
-  const h = Math.max(1, Math.round(cropRect.value.height * inv))
+  const imgW = cropImage.naturalWidth
+  const imgH = cropImage.naturalHeight
+  let sx = Math.round(cropRect.value.x * inv)
+  let sy = Math.round(cropRect.value.y * inv)
+  let w = Math.max(1, Math.round(cropRect.value.width * inv))
+  let h = Math.max(1, Math.round(cropRect.value.height * inv))
+  sx = Math.max(0, Math.min(sx, imgW - 1))
+  sy = Math.max(0, Math.min(sy, imgH - 1))
+  w = Math.max(1, Math.min(w, imgW - sx))
+  h = Math.max(1, Math.min(h, imgH - sy))
   const canvas = document.createElement('canvas')
   canvas.width = w
   canvas.height = h
@@ -1271,7 +1278,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="tip-item">
             <span>02</span>
-            <p>框选范围尽量贴近眼部，瞳孔位于框内中心附近。</p>
+            <p>框选宜包含镜筒与眼周余量，勿贴紧虹膜边缘；瞳孔尽量居中。</p>
           </div>
           <div class="tip-item">
             <span>03</span>
