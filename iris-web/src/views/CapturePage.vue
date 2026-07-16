@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, computed } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   analyzeIris,
@@ -14,6 +14,8 @@ import BrandLogo from '../components/BrandLogo.vue'
 
 const { isMobile } = useLayoutMode()
 
+type CameraErrorKind = 'insecure' | 'permission' | 'unavailable' | 'unknown'
+
 const videoRef = ref<HTMLVideoElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const adjustCanvasRef = ref<HTMLCanvasElement | null>(null)
@@ -22,6 +24,7 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const resultCardRef = ref<HTMLElement | null>(null)
 const captureCardRef = ref<HTMLElement | null>(null)
 const diagnosisRef = ref<HTMLElement | null>(null)
+const actionsBarRef = ref<HTMLElement | null>(null)
 
 const cameraActive = ref(false)
 const previewUrl = ref<string | null>(null)
@@ -41,6 +44,10 @@ const cropCursor = ref('crosshair')
 const skipQuality = ref(false)
 const settingsOpen = ref(false)
 const cameraErrorOpen = ref(false)
+const cameraErrorKind = ref<CameraErrorKind>('unknown')
+const reportPreviewOpen = ref(false)
+const reportPreviewUrl = ref<string | null>(null)
+const mobileBottomInset = ref(150)
 const isCoarsePointer =
   typeof window !== 'undefined' &&
   typeof window.matchMedia === 'function' &&
@@ -49,6 +56,102 @@ const touchTolBoost = isCoarsePointer ? 1.8 : 1
 const cameraFacing = ref<'environment' | 'user'>('environment')
 const cameraSwitching = ref(false)
 const appVersion = ref('')
+
+let actionsResizeObserver: ResizeObserver | null = null
+
+function isSecureCameraContext() {
+  return typeof window !== 'undefined' && window.isSecureContext
+}
+
+function isWeChatBrowser() {
+  return typeof navigator !== 'undefined' && /MicroMessenger/i.test(navigator.userAgent)
+}
+
+function isIosLike() {
+  if (typeof navigator === 'undefined') return false
+  const ua = navigator.userAgent
+  if (/iPad|iPhone|iPod/i.test(ua)) return true
+  return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1
+}
+
+function needsManualSaveForReport() {
+  return isIosLike() || isWeChatBrowser()
+}
+
+const cameraStatusShort = computed(() => {
+  if (!cameraActive.value) return '未接入'
+  return cameraFacing.value === 'environment' ? '后摄就绪' : '前摄就绪'
+})
+
+const cameraStatusFull = computed(() => {
+  if (!cameraActive.value) return '摄像头未接入'
+  return `摄像头已就绪（${cameraFacing.value === 'environment' ? '后摄' : '前摄'}）`
+})
+
+const cameraErrorTitle = computed(() => {
+  switch (cameraErrorKind.value) {
+    case 'insecure':
+      return '需要 HTTPS 才能拍照'
+    case 'permission':
+      return '摄像头权限未开启'
+    case 'unavailable':
+      return '未检测到可用摄像头'
+    default:
+      return '摄像头不可用'
+  }
+})
+
+const cameraErrorDetail = computed(() => {
+  switch (cameraErrorKind.value) {
+    case 'insecure':
+      return '当前页面不是安全连接（HTTPS），手机浏览器通常不允许调用摄像头。请改用 HTTPS 访问本系统，或直接上传眼部图片进行分析。'
+    case 'permission':
+      return '浏览器或系统拒绝了摄像头权限。请在站点/系统设置中允许使用摄像头后重试；也可以直接上传眼部图片进行分析。'
+    case 'unavailable':
+      return '未找到可用摄像头设备。请检查设备后重试，或直接上传眼部图片进行分析。'
+    default:
+      return '无法访问摄像头，请检查系统或浏览器权限设置；您也可以直接上传眼部图片进行分析。'
+  }
+})
+
+const reportPreviewHint = computed(() => {
+  if (isWeChatBrowser()) {
+    return '请长按上方图片保存。若无法保存，请点击右上角菜单，选择「在浏览器中打开」后再试。'
+  }
+  return '请长按上方图片，选择「存储图像」或「添加到照片」。'
+})
+
+function openCameraError(kind: CameraErrorKind) {
+  cameraErrorKind.value = kind
+  cameraErrorOpen.value = true
+}
+
+function classifyCameraError(err: unknown): CameraErrorKind {
+  if (!isSecureCameraContext()) return 'insecure'
+  const name = err instanceof DOMException ? err.name : ''
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError') return 'permission'
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') return 'unavailable'
+  if (name === 'SecurityError') return 'insecure'
+  return 'unknown'
+}
+
+function syncMobileBottomInset() {
+  if (!isMobile.value) return
+  const el = actionsBarRef.value
+  if (!el) {
+    mobileBottomInset.value = 150
+    return
+  }
+  mobileBottomInset.value = Math.max(120, Math.ceil(el.getBoundingClientRect().height) + 16)
+}
+
+function closeReportPreview() {
+  reportPreviewOpen.value = false
+  if (reportPreviewUrl.value) {
+    URL.revokeObjectURL(reportPreviewUrl.value)
+    reportPreviewUrl.value = null
+  }
+}
 
 interface CropRect {
   x: number
@@ -276,23 +379,67 @@ async function downloadResultReport() {
   const stamp = new Date().toLocaleString('zh-CN', { hour12: false })
   ctx.fillText(`Generated ${stamp}`, blockX, cardPadTop + cardHeight - 18)
 
-  canvas.toBlob((blob) => {
-    if (!blob) {
-      ElMessage.error('报告生成失败，请重试')
-      return
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, 'image/png')
+  })
+  if (!blob) {
+    ElMessage.error('报告生成失败，请重试')
+    return
+  }
+
+  const filename = `iris-color-report-${Date.now()}.png`
+  const url = URL.createObjectURL(blob)
+
+  if (needsManualSaveForReport()) {
+    const nav = navigator as Navigator & {
+      canShare?: (data: ShareData) => boolean
     }
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `iris-color-report-${Date.now()}.png`
-    link.click()
-    URL.revokeObjectURL(url)
-    ElMessage.success('分析报告已保存至本地')
-  }, 'image/png')
+    if (typeof nav.share === 'function') {
+      const file = new File([blob], filename, { type: 'image/png' })
+      const shareData: ShareData = { files: [file], title: '虹膜颜色分析报告' }
+      const canShareFiles = typeof nav.canShare !== 'function' || nav.canShare(shareData)
+      if (canShareFiles) {
+        try {
+          await nav.share(shareData)
+          URL.revokeObjectURL(url)
+          ElMessage.success('已调起分享，请选择存储或发送')
+          return
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') {
+            URL.revokeObjectURL(url)
+            return
+          }
+        }
+      }
+    }
+    closeReportPreview()
+    reportPreviewUrl.value = url
+    reportPreviewOpen.value = true
+    return
+  }
+
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
+  ElMessage.success('分析报告已保存至本地')
 }
 
 async function startCamera(options?: { showErrorOnFail?: boolean }): Promise<boolean> {
   stopCamera()
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+    if (options?.showErrorOnFail) {
+      openCameraError(isSecureCameraContext() ? 'unavailable' : 'insecure')
+    }
+    return false
+  }
+  if (!isSecureCameraContext()) {
+    if (options?.showErrorOnFail) {
+      openCameraError('insecure')
+    }
+    return false
+  }
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
       video: {
@@ -308,9 +455,9 @@ async function startCamera(options?: { showErrorOnFail?: boolean }): Promise<boo
       cameraActive.value = true
     }
     return true
-  } catch {
+  } catch (err) {
     if (options?.showErrorOnFail) {
-      cameraErrorOpen.value = true
+      openCameraError(classifyCameraError(err))
     }
     return false
   }
@@ -984,8 +1131,18 @@ function axiosIsError(err: unknown): err is { response?: { data?: unknown } } {
   return typeof err === 'object' && err !== null && 'response' in err
 }
 
+watch(
+  [isMobile, cropMode, previewUrl, manualMode, loading, manualLoading],
+  () => {
+    nextTick(syncMobileBottomInset)
+  },
+)
+
 onMounted(() => {
-  startCamera()
+  // 非 HTTPS 下不自动申请摄像头，避免无意义失败；用户点「拍照」时再给出明确提示
+  if (isSecureCameraContext()) {
+    startCamera()
+  }
   if (!isMobile.value) {
     checkHealth()
       .then((h) => {
@@ -994,9 +1151,19 @@ onMounted(() => {
       })
       .catch(() => {})
   }
+  nextTick(() => {
+    syncMobileBottomInset()
+    if (typeof ResizeObserver !== 'undefined' && actionsBarRef.value) {
+      actionsResizeObserver = new ResizeObserver(() => syncMobileBottomInset())
+      actionsResizeObserver.observe(actionsBarRef.value)
+    }
+  })
 })
 
 onBeforeUnmount(() => {
+  actionsResizeObserver?.disconnect()
+  actionsResizeObserver = null
+  closeReportPreview()
   stopCamera()
   resetCropRenderCache()
   revokePreviewUrls()
@@ -1004,7 +1171,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="page-shell" :class="{ 'layout-desktop': !isMobile }">
+  <main
+    class="page-shell"
+    :class="{ 'layout-desktop': !isMobile }"
+    :style="isMobile ? { '--mobile-bottom-inset': `${mobileBottomInset}px` } : undefined"
+  >
     <!-- 桌面端：专业软件顶栏 -->
     <header v-if="!isMobile" class="desktop-titlebar">
       <div class="desktop-brand">
@@ -1033,9 +1204,9 @@ onBeforeUnmount(() => {
         <h1>虹膜颜色识别</h1>
       </div>
       <div class="hero-actions">
-        <div class="hero-status">
+        <div class="hero-status" :title="cameraStatusFull" :aria-label="cameraStatusFull">
           <span class="status-dot" :class="{ active: cameraActive }"></span>
-          <span>{{ cameraActive ? `摄像头已就绪（${cameraFacing === 'environment' ? '后摄' : '前摄'}）` : '摄像头未接入' }}</span>
+          <span>{{ cameraStatusShort }}</span>
         </div>
         <button
           type="button"
@@ -1138,7 +1309,7 @@ onBeforeUnmount(() => {
           <canvas ref="canvasRef" class="hidden-canvas" />
         </div>
 
-        <div class="actions">
+        <div ref="actionsBarRef" class="actions">
           <input
             ref="fileInputRef"
             type="file"
@@ -1420,10 +1591,10 @@ onBeforeUnmount(() => {
                 <path d="M12 11v4" stroke-linecap="round" />
               </svg>
             </div>
-            <h3 id="camera-dialog-title">摄像头不可用</h3>
+            <h3 id="camera-dialog-title">{{ cameraErrorTitle }}</h3>
           </header>
           <p class="app-dialog-body">
-            无法访问摄像头，请检查系统或浏览器权限设置；您也可以直接上传眼部图片进行分析。
+            {{ cameraErrorDetail }}
           </p>
           <footer class="app-dialog-footer">
             <button type="button" class="app-dialog-btn app-dialog-btn--ghost" @click="closeCameraErrorDialog">
@@ -1431,6 +1602,37 @@ onBeforeUnmount(() => {
             </button>
             <button type="button" class="app-dialog-btn app-dialog-btn--primary" @click="openFilePickerFromCameraDialog">
               选择文件
+            </button>
+          </footer>
+        </div>
+      </div>
+    </teleport>
+
+    <!-- iOS / 微信：报告预览长按保存 -->
+    <teleport to="body">
+      <div
+        v-if="reportPreviewOpen && reportPreviewUrl"
+        class="app-dialog-backdrop"
+        @click.self="closeReportPreview"
+      >
+        <div class="app-dialog app-dialog--report" role="dialog" aria-labelledby="report-dialog-title">
+          <header class="app-dialog-header">
+            <div class="app-dialog-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3v12" />
+                <path d="M7 10l5 5 5-5" />
+                <path d="M5 21h14" />
+              </svg>
+            </div>
+            <h3 id="report-dialog-title">保存分析报告</h3>
+          </header>
+          <div class="app-dialog-report-body">
+            <img :src="reportPreviewUrl" alt="虹膜颜色分析报告" class="report-preview-img" />
+            <p>{{ reportPreviewHint }}</p>
+          </div>
+          <footer class="app-dialog-footer">
+            <button type="button" class="app-dialog-btn app-dialog-btn--primary" @click="closeReportPreview">
+              完成
             </button>
           </footer>
         </div>
@@ -1553,7 +1755,7 @@ onBeforeUnmount(() => {
 }
 
 .result-card {
-  /* 自动滚动到结果时顶部留出呼吸空间 */
+  /* 桌面端滚动留白；手机端在 max-width:640px 中覆盖为含顶栏/底栏高度 */
   scroll-margin-top: 12px;
 }
 
@@ -1911,6 +2113,35 @@ onBeforeUnmount(() => {
 .app-dialog-btn--primary:hover {
   border-color: #125a7f;
   background: #125a7f;
+}
+
+.app-dialog--report {
+  width: min(100%, 420px);
+}
+
+.app-dialog-report-body {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px 4px;
+}
+
+.report-preview-img {
+  display: block;
+  width: 100%;
+  max-height: min(58vh, 520px);
+  object-fit: contain;
+  border: 1px solid #dceaf2;
+  border-radius: 10px;
+  background: #eef5f8;
+  -webkit-touch-callout: default;
+  user-select: none;
+}
+
+.app-dialog-report-body p {
+  margin: 0;
+  color: #4a6278;
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .manual-panel {
@@ -2515,10 +2746,22 @@ onBeforeUnmount(() => {
 /* ============ 移动端 App 化布局（固定顶栏 + 固定底部操作栏） ============ */
 @media (max-width: 640px) {
   .page-shell {
-    /* 为固定顶栏与底部操作栏预留空间，中间内容区独立滚动 */
-    padding: calc(60px + env(safe-area-inset-top)) 0 calc(150px + env(safe-area-inset-bottom));
+    /* 为固定顶栏与底部操作栏预留空间；底栏高度由 JS 写入 --mobile-bottom-inset */
+    padding: calc(60px + env(safe-area-inset-top)) 0
+      calc(var(--mobile-bottom-inset, 150px) + env(safe-area-inset-bottom));
     padding-left: max(12px, env(safe-area-inset-left));
     padding-right: max(12px, env(safe-area-inset-right));
+  }
+
+  .capture-card,
+  .result-card {
+    scroll-margin-top: calc(72px + env(safe-area-inset-top));
+    scroll-margin-bottom: calc(var(--mobile-bottom-inset, 150px) + env(safe-area-inset-bottom));
+  }
+
+  .diagnosis-summary {
+    scroll-margin-top: calc(72px + env(safe-area-inset-top));
+    scroll-margin-bottom: calc(var(--mobile-bottom-inset, 150px) + env(safe-area-inset-bottom));
   }
 
   /* —— 顶部应用导航栏 —— */
@@ -2718,9 +2961,10 @@ onBeforeUnmount(() => {
     transition: transform 0.12s ease;
   }
 
-  /* 子操作：识别后出现，更小、视觉次一级 */
+  /* 子操作：识别后出现，2×2 网格避免一行挤 4 个 */
   .action-row--secondary {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 8px;
     margin: 0;
     padding-bottom: 8px;
@@ -2728,16 +2972,16 @@ onBeforeUnmount(() => {
   }
 
   .action-row--secondary :deep(.el-button) {
-    flex: 1;
+    width: 100%;
     min-width: 0;
-    min-height: 38px;
+    min-height: 42px;
     margin-left: 0;
-    padding: 0 6px;
+    padding: 0 8px;
     border-radius: 10px;
     color: #436076;
     background: #f3f8fb;
     border-color: #d9e7f0;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 500;
     transition: transform 0.12s ease;
   }

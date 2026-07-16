@@ -21,13 +21,14 @@
     header p { margin: 0; color: #8b949e; font-size: 13px; }
     main {
       display: grid;
-      grid-template-columns: 360px 1fr;
+      grid-template-columns: 320px minmax(0, 1fr) 340px;
       gap: 16px;
       padding: 16px;
-      max-width: 1400px;
+      max-width: 1680px;
       margin: 0 auto;
+      align-items: start;
     }
-    @media (max-width: 960px) {
+    @media (max-width: 1200px) {
       main { grid-template-columns: 1fr; }
     }
     .panel {
@@ -87,18 +88,44 @@
     }
     .metrics {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
       gap: 8px;
       margin-bottom: 16px;
+    }
+    .metrics-summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    @media (max-width: 960px) {
+      .metrics-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     .metric {
       background: #0d1117;
       border: 1px solid #30363d;
       border-radius: 6px;
       padding: 8px 10px;
+      min-width: 0;
     }
     .metric .k { font-size: 11px; color: #8b949e; }
-    .metric .v { font-size: 15px; font-weight: 600; color: #79c0ff; margin-top: 2px; }
+    .metric .v {
+      font-size: 15px;
+      font-weight: 600;
+      color: #79c0ff;
+      margin-top: 2px;
+      line-height: 1.35;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    .metric .v.reason {
+      font-size: 13px;
+      font-weight: 500;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+      overflow: hidden;
+    }
     .grade-big {
       font-size: 42px;
       font-weight: 700;
@@ -110,6 +137,15 @@
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
       gap: 12px;
+      margin-bottom: 16px;
+    }
+    .result-metrics {
+      border-top: 1px solid #30363d;
+      padding-top: 16px;
+      margin-top: 4px;
+    }
+    .result-metrics .grade-big {
+      margin-top: 0;
     }
     .stage {
       background: #0d1117;
@@ -130,7 +166,8 @@
     .run-meta { font-size: 12px; color: #8b949e; margin-bottom: 12px; }
     .history { margin-top: 12px; font-size: 12px; }
     .history a { color: #58a6ff; display: block; margin: 4px 0; }
-    .manual-editor { margin-top: 14px; border-top: 1px solid #30363d; padding-top: 12px; }
+    .manual-editor { margin: 0; padding: 0; border: none; }
+    .manual-panel .empty { padding: 24px 12px; }
     .manual-canvas-wrap { width: 100%; background: #000; border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
     #manualCanvas { width: 100%; display: block; cursor: default; touch-action: none; }
     .manual-fields {
@@ -148,6 +185,44 @@
       color: #e6edf3;
     }
     .manual-hint { font-size: 12px; color: #8b949e; margin-bottom: 10px; line-height: 1.5; }
+    .img-source {
+      margin-bottom: 12px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #30363d;
+    }
+    .img-source select {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #30363d;
+      background: #0d1117;
+      color: #e6edf3;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+    .img-path {
+      font-size: 12px;
+      color: #8b949e;
+      word-break: break-all;
+      margin-bottom: 8px;
+      min-height: 18px;
+    }
+    .rename-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
+    .rename-status {
+      font-size: 12px;
+      color: #8b949e;
+      text-align: center;
+      margin-bottom: 12px;
+      word-break: break-all;
+    }
+    .rename-status.ok { color: #3fb950; }
+    .rename-status.err { color: #ffa198; }
   </style>
 </head>
 <body>
@@ -161,6 +236,18 @@
       <h2>输入</h2>
       <label for="debugKey">Debug Key</label>
       <input id="debugKey" type="text" placeholder="iris-color-dev" />
+
+      <div class="img-source">
+        <label for="imgSelect">从 img 文件夹选择（可重命名）</label>
+        <select id="imgSelect">
+          <option value="">— 载入列表后选择 —</option>
+        </select>
+        <div class="btn-row">
+          <button type="button" id="btnLoadImgList">刷新 img 列表</button>
+          <button type="button" id="btnLoadImg" class="primary">载入选中图片</button>
+        </div>
+        <div class="img-path" id="imgPathHint">未关联 img 文件（本地上传无法重命名）</div>
+      </div>
 
       <div class="camera-box">
         <video id="video" autoplay playsinline muted></video>
@@ -184,8 +271,36 @@
         开始识别并生成调试图
       </button>
 
+      <div class="history" id="history"></div>
+    </section>
+
+    <section class="panel" id="resultPanel">
+      <h2>识别结果</h2>
+      <div id="placeholder" class="empty">拍照或上传后点击「开始识别」</div>
+      <div id="errorBox" class="error" hidden></div>
+      <div id="resultContent" hidden>
+        <div class="run-meta" id="runMeta"></div>
+        <div class="stages" id="stagesGrid"></div>
+        <div class="result-metrics">
+          <div class="grade-big" id="gradeDisplay"></div>
+          <div class="rename-row">
+            <button type="button" id="btnRenameGrade" disabled>标记为 G{n}_L{L*}_</button>
+          </div>
+          <label class="checkbox" id="markManualRow" hidden>
+            <input type="checkbox" id="markManual" />
+            人工调整区域（文件名加 _M_ 标记）
+          </label>
+          <div class="rename-status" id="renameStatus"></div>
+          <div class="metrics-summary" id="metricsSummary"></div>
+          <div class="metrics" id="metricsGrid"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel manual-panel" id="manualPanel">
+      <h2>人工调整</h2>
+      <div id="manualPlaceholder" class="empty">识别完成后，在此拖动圆环调整取色区域</div>
       <div class="manual-editor" id="manualEditor" hidden>
-        <h2>人工调整</h2>
         <div class="manual-hint">拖动中心移动整组圆；拖动蓝/红/绿圆边分别调整瞳孔、内环、外环。也可直接改数值。</div>
         <div class="manual-canvas-wrap">
           <canvas id="manualCanvas"></canvas>
@@ -200,20 +315,6 @@
         <button type="button" id="btnManualAnalyze" class="primary" style="width:100%">
           应用人工调整并重新识别
         </button>
-      </div>
-
-      <div class="history" id="history"></div>
-    </section>
-
-    <section class="panel" id="resultPanel">
-      <h2>识别结果</h2>
-      <div id="placeholder" class="empty">拍照或上传后点击「开始识别」</div>
-      <div id="errorBox" class="error" hidden></div>
-      <div id="resultContent" hidden>
-        <div class="run-meta" id="runMeta"></div>
-        <div class="grade-big" id="gradeDisplay"></div>
-        <div class="metrics" id="metricsGrid"></div>
-        <div class="stages" id="stagesGrid"></div>
       </div>
     </section>
   </main>
@@ -239,6 +340,11 @@
       outer_radius: document.getElementById('manualOuterRadius'),
     }
     let currentBlob = null
+    let currentImgRel = null
+    let lastGrade = null
+    let lastMetrics = null
+    let lastManualAdjusted = false
+    let imgFileList = []
     let mediaStream = null
     let manualState = null
     let manualImage = new Image()
@@ -269,12 +375,103 @@
       }
     }
 
-    function setImageBlob(blob) {
+    function setImageBlob(blob, sourceRel = null) {
       currentBlob = blob
+      currentImgRel = sourceRel
       btnAnalyze.disabled = false
       preview.src = URL.createObjectURL(blob)
       preview.hidden = false
       video.hidden = true
+      updateImgPathHint()
+      updateRenameButton()
+    }
+
+    function updateImgPathHint() {
+      const el = document.getElementById('imgPathHint')
+      if (currentImgRel) {
+        el.textContent = `已关联：${currentImgRel}`
+        el.style.color = '#79c0ff'
+      } else {
+        el.textContent = '未关联 img 文件（请从上方列表载入，本地上传无法重命名）'
+        el.style.color = '#8b949e'
+      }
+    }
+
+    function updateRenameButton() {
+      const btn = document.getElementById('btnRenameGrade')
+      const markManual = document.getElementById('markManual')
+      const markManualRow = document.getElementById('markManualRow')
+      const lStar = lastMetrics?.lab?.L
+      const canRename = Boolean(currentImgRel && lastGrade >= 1 && lastGrade <= 5 && lStar != null)
+      btn.disabled = !canRename
+      markManualRow.hidden = !canRename
+      const manualPart = markManual.checked ? '_M' : ''
+      btn.textContent = canRename
+        ? `标记为 G${lastGrade}_L${Number(lStar).toFixed(1)}${manualPart}_`
+        : '标记为 G{n}_L{L*}_'
+    }
+
+    function setManualMarkFlag(isManual) {
+      lastManualAdjusted = isManual
+      const markManual = document.getElementById('markManual')
+      markManual.checked = isManual
+      updateRenameButton()
+    }
+
+    function formatGradeDisplay(grade, lStar, isManual) {
+      const manualText = isManual ? '  ·  人工调整' : ''
+      return `Grade ${grade}  ·  L* ${Number(lStar ?? 0).toFixed(2)}${manualText}`
+    }
+
+    function resolveRelByFilename(filename) {
+      const matches = imgFileList.filter((item) => item.name === filename)
+      if (matches.length === 1) return matches[0].rel
+      return null
+    }
+
+    async function loadImgList() {
+      const apiKey = keyInput.value.trim()
+      const select = document.getElementById('imgSelect')
+      try {
+        const res = await fetch('/debug/img/list', {
+          headers: { 'X-Debug-Key': apiKey },
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.detail || res.statusText)
+        imgFileList = data.images || []
+        select.innerHTML = '<option value="">— 选择图片 —</option>' + imgFileList.map((item) => {
+          const grade = item.grade_prefix ? `G${item.grade_prefix}` : ''
+          const lStar = item.l_star_prefix != null ? ` L${Number(item.l_star_prefix).toFixed(1)}` : ''
+          const manual = item.manual_adjusted ? ' M' : ''
+          const tag = grade ? ` [${grade}${lStar}${manual}]` : ''
+          return `<option value="${item.rel}">${item.rel}${tag}</option>`
+        }).join('')
+      } catch (err) {
+        alert('载入 img 列表失败：' + (err.message || err))
+      }
+    }
+
+    document.getElementById('btnLoadImgList').onclick = () => loadImgList()
+
+    document.getElementById('btnLoadImg').onclick = async () => {
+      const rel = document.getElementById('imgSelect').value
+      if (!rel) return alert('请先选择一张图片')
+      const apiKey = keyInput.value.trim()
+      try {
+        const res = await fetch(`/debug/img/file?rel=${encodeURIComponent(rel)}&key=${encodeURIComponent(apiKey)}`, {
+          headers: { 'X-Debug-Key': apiKey },
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data.detail || res.statusText)
+        }
+        const blob = await res.blob()
+        setImageBlob(blob, rel)
+        document.getElementById('renameStatus').textContent = ''
+        document.getElementById('renameStatus').className = 'rename-status'
+      } catch (err) {
+        alert('载入图片失败：' + (err.message || err))
+      }
     }
 
     document.getElementById('btnCapture').onclick = () => {
@@ -282,23 +479,40 @@
       canvas.width = video.videoWidth
       canvas.height = video.videoHeight
       canvas.getContext('2d').drawImage(video, 0, 0)
-      canvas.toBlob((blob) => blob && setImageBlob(blob), 'image/jpeg', 0.92)
+      canvas.toBlob((blob) => blob && setImageBlob(blob, null), 'image/jpeg', 0.92)
     }
 
     document.getElementById('btnUpload').onclick = () => fileInput.click()
     fileInput.onchange = () => {
       const f = fileInput.files?.[0]
-      if (f) setImageBlob(f)
+      if (f) {
+        const rel = resolveRelByFilename(f.name)
+        setImageBlob(f, rel)
+        if (rel) {
+          document.getElementById('imgSelect').value = rel
+        }
+        document.getElementById('renameStatus').textContent = ''
+        document.getElementById('renameStatus').className = 'rename-status'
+      }
       fileInput.value = ''
     }
 
     document.getElementById('btnClear').onclick = () => {
       currentBlob = null
+      currentImgRel = null
+      lastGrade = null
+      lastMetrics = null
+      lastManualAdjusted = false
+      document.getElementById('markManual').checked = false
       manualState = null
       btnAnalyze.disabled = true
-      manualEditor.hidden = true
+      setManualEditorVisible(false)
       preview.hidden = true
       video.hidden = false
+      updateImgPathHint()
+      updateRenameButton()
+      document.getElementById('renameStatus').textContent = ''
+      document.getElementById('renameStatus').className = 'rename-status'
     }
 
     function paramsFromMetrics(m) {
@@ -399,6 +613,11 @@
       manualCanvas.style.cursor = hitMode(canvasPoint(event)) ? 'grab' : 'default'
     }
 
+    function setManualEditorVisible(visible) {
+      manualEditor.hidden = !visible
+      document.getElementById('manualPlaceholder').hidden = visible
+    }
+
     function setupManualEditor(metrics, originalUrl) {
       manualState = paramsFromMetrics(metrics)
       manualImage = new Image()
@@ -407,7 +626,7 @@
         manualCanvas.height = manualImage.naturalHeight
         normalizeManualState()
         drawManualCanvas()
-        manualEditor.hidden = false
+        setManualEditorVisible(true)
       }
       manualImage.src = originalUrl
     }
@@ -457,12 +676,31 @@
       if (!dragMode) manualCanvas.style.cursor = 'default'
     })
 
+    function escapeHtml(text) {
+      return String(text ?? '-')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+    }
+
+    function metricCard(label, value, { reason = false } = {}) {
+      const safeLabel = escapeHtml(label)
+      const raw = value ?? '-'
+      const safeValue = escapeHtml(raw)
+      const title = reason && raw !== '-' ? ` title="${escapeHtml(raw)}"` : ''
+      const valueClass = reason ? 'v reason' : 'v'
+      return `<div class="metric"><div class="k">${safeLabel}</div><div class="${valueClass}"${title}>${safeValue}</div></div>`
+    }
+
     function renderMetrics(m) {
-      const items = [
+      const summaryItems = [
         ['Grade', m.grade],
         ['虹膜颜色', m.iris_color?.label],
         ['颜色置信度', m.iris_color?.confidence != null ? (m.iris_color.confidence * 100).toFixed(0) + '%' : '-'],
         ['颜色依据', m.iris_color?.reason],
+      ]
+      const detailItems = [
         ['置信度', (m.confidence * 100).toFixed(0) + '%'],
         ['L*', m.lab?.L],
         ['a*', m.lab?.a],
@@ -485,8 +723,11 @@
         ['过曝比', m.overexposed_ratio],
         ['高光阈值 V', m.highlight_v_threshold],
       ]
-      document.getElementById('metricsGrid').innerHTML = items.map(([k, v]) =>
-        `<div class="metric"><div class="k">${k}</div><div class="v">${v ?? '-'}</div></div>`
+      document.getElementById('metricsSummary').innerHTML = summaryItems.map(([k, v], idx) =>
+        metricCard(k, v, { reason: idx === 3 })
+      ).join('')
+      document.getElementById('metricsGrid').innerHTML = detailItems.map(([k, v]) =>
+        metricCard(k, v)
       ).join('')
     }
 
@@ -548,11 +789,16 @@
         }
 
         document.getElementById('resultContent').hidden = false
-        document.getElementById('gradeDisplay').textContent = `Grade ${data.metrics.grade}`
+        lastGrade = data.metrics.grade
+        lastMetrics = data.metrics
+        setManualMarkFlag(false)
+        document.getElementById('gradeDisplay').textContent =
+          formatGradeDisplay(data.metrics.grade, data.metrics.lab?.L, false)
         document.getElementById('runMeta').textContent =
           data.run_id
             ? `run_id: ${data.run_id} | 保存目录: ${data.saved_dir || '-'}`
             : '未保存到本地；阶段图由本次响应直接展示'
+        updateRenameButton()
         const imageSources = imageSourcesFromResponse(data)
         renderMetrics(data.metrics)
         renderStages(imageSources)
@@ -593,11 +839,16 @@
             : (data.detail || res.statusText))
         }
         document.getElementById('resultContent').hidden = false
-        document.getElementById('gradeDisplay').textContent = `Grade ${data.metrics.grade}`
+        lastGrade = data.metrics.grade
+        lastMetrics = data.metrics
+        setManualMarkFlag(true)
+        document.getElementById('gradeDisplay').textContent =
+          formatGradeDisplay(data.metrics.grade, data.metrics.lab?.L, true)
         document.getElementById('runMeta').textContent =
           data.run_id
             ? `run_id: ${data.run_id} | 保存目录: ${data.saved_dir || '-'} | 人工调整`
             : '未保存到本地；阶段图由本次响应直接展示 | 人工调整'
+        updateRenameButton()
         const imageSources = imageSourcesFromResponse(data)
         renderMetrics(data.metrics)
         renderStages(imageSources)
@@ -612,8 +863,58 @@
       }
     }
 
+    document.getElementById('btnRenameGrade').onclick = async () => {
+      if (!currentImgRel || !lastGrade || lastMetrics?.lab?.L == null) return
+      const apiKey = keyInput.value.trim()
+      const btn = document.getElementById('btnRenameGrade')
+      const statusEl = document.getElementById('renameStatus')
+      const oldRel = currentImgRel
+      btn.disabled = true
+      statusEl.textContent = '标记中...'
+      statusEl.className = 'rename-status'
+
+      try {
+        const res = await fetch(`/debug/rename-grade?key=${encodeURIComponent(apiKey)}`, {
+          method: 'POST',
+          headers: {
+            'X-Debug-Key': apiKey,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            rel: currentImgRel,
+            grade: lastGrade,
+            lab: lastMetrics.lab,
+            iris_color: lastMetrics.iris_color,
+            confidence: lastMetrics.confidence,
+            manual_adjusted: document.getElementById('markManual').checked,
+          }),
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))
+        }
+        currentImgRel = data.new_rel
+        document.getElementById('imgSelect').value = data.new_rel
+        updateImgPathHint()
+        const lText = data.l_star != null ? `，L*=${Number(data.l_star).toFixed(2)}` : ''
+        const mText = data.manual_adjusted ? '，人工调整' : ''
+        statusEl.textContent = `已标记：${oldRel} → ${data.new_rel}${lText}${mText}（索引已写入 labels/img_labels.json）`
+        statusEl.className = 'rename-status ok'
+        await loadImgList()
+        document.getElementById('imgSelect').value = data.new_rel
+      } catch (err) {
+        statusEl.textContent = '标记失败：' + (err.message || err)
+        statusEl.className = 'rename-status err'
+      } finally {
+        updateRenameButton()
+      }
+    }
+
+    document.getElementById('markManual').addEventListener('change', updateRenameButton)
+
     startCamera()
     loadHistory(keyInput.value)
+    loadImgList()
   </script>
 </body>
 </html>

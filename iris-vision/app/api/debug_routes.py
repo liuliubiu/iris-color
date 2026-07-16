@@ -1,11 +1,14 @@
 """调试后门 API（不对接前端业务）。"""
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, Query, UploadFile
-from fastapi.responses import HTMLResponse
+import cv2
+import numpy as np
+from fastapi import APIRouter, Body, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse
 
 from app.models.schemas import DebugAnalysisResponse
 from app.services.debug_viz import (
@@ -21,6 +24,12 @@ router = APIRouter(prefix="/debug", tags=["debug"])
 ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = ROOT / "config" / "grade_thresholds.yaml"
 DEFAULT_OUTPUT = ROOT / "debug_output"
+IMG_ROOT = ROOT.parent / "img"
+IMG_EXTS = (".jpg", ".jpeg", ".png")
+LABELS_PATH = ROOT / "labels" / "img_labels.json"
+# G2_L51.2_ 或旧版 G2_
+LABEL_PREFIX_RE = re.compile(r"^G([1-5])_L([\d.]+)_", re.IGNORECASE)
+LEGACY_GRADE_PREFIX_RE = re.compile(r"^G[1-5]_", re.IGNORECASE)
 
 
 def _verify_debug_key(provided: Optional[str], config: dict) -> None:
@@ -32,10 +41,130 @@ def _verify_debug_key(provided: Optional[str], config: dict) -> None:
         raise HTTPException(status_code=403, detail="invalid_debug_key")
 
 
-def _decode_image(content: bytes):
-    import cv2
-    import numpy as np
+def _safe_img_rel(rel: str) -> Path:
+    """把前端传来的相对路径限制在 img/ 目录内，避免路径穿越。"""
+    rel = (rel or "").replace("\\", "/").lstrip("/")
+    target = (IMG_ROOT / rel).resolve()
+    if not str(target).startswith(str(IMG_ROOT.resolve())):
+        raise HTTPException(status_code=400, detail="invalid_path")
+    return target
 
+
+def _list_img_files() -> list[str]:
+    if not IMG_ROOT.exists():
+        return []
+    items = []
+    for path in IMG_ROOT.rglob("*"):
+        if path.suffix.lower() in IMG_EXTS and path.is_file():
+            items.append(path.relative_to(IMG_ROOT).as_posix())
+    return sorted(items)
+
+
+def _strip_label_prefix(stem: str) -> str:
+    match = LABEL_PREFIX_RE.match(stem)
+    if match:
+        rest = stem[match.end() :]
+        if len(rest) >= 2 and rest[0] in "Mm" and rest[1] == "_":
+            rest = rest[2:]
+        return rest
+    legacy = LEGACY_GRADE_PREFIX_RE.match(stem)
+    if legacy:
+        rest = stem[legacy.end() :]
+        if len(rest) >= 2 and rest[0] in "Mm" and rest[1] == "_":
+            rest = rest[2:]
+        return rest
+    return stem
+
+
+def _manual_marker_after_l_star(stem: str, prefix_end: int) -> bool:
+    rest = stem[prefix_end:]
+    return len(rest) >= 2 and rest[0] in "Mm" and rest[1] == "_"
+
+
+def _format_l_star(l_star: float) -> str:
+    return f"{l_star:.1f}"
+
+
+def _parse_label_prefix(filename: str) -> dict:
+    stem = Path(filename).stem
+    match = LABEL_PREFIX_RE.match(stem)
+    if match:
+        return {
+            "grade_prefix": int(match.group(1)),
+            "l_star_prefix": float(match.group(2)),
+            "manual_adjusted": _manual_marker_after_l_star(stem, match.end()),
+        }
+    legacy = LEGACY_GRADE_PREFIX_RE.match(stem)
+    if legacy:
+        return {
+            "grade_prefix": int(legacy.group(0)[1]),
+            "l_star_prefix": None,
+            "manual_adjusted": _manual_marker_after_l_star(stem, legacy.end()),
+        }
+    return {"grade_prefix": None, "l_star_prefix": None, "manual_adjusted": False}
+
+
+def _apply_label_prefix(
+    filename: str,
+    grade: int,
+    l_star: Optional[float] = None,
+    *,
+    manual_adjusted: bool = False,
+) -> str:
+    path = Path(filename)
+    stem = _strip_label_prefix(path.stem)
+    manual_part = "_M" if manual_adjusted else ""
+    if l_star is not None:
+        return f"G{grade}_L{_format_l_star(l_star)}{manual_part}_{stem}{path.suffix}"
+    if manual_adjusted:
+        return f"G{grade}_M_{stem}{path.suffix}"
+    return f"G{grade}_{stem}{path.suffix}"
+
+
+def _load_img_labels() -> dict:
+    if LABELS_PATH.exists():
+        try:
+            return json.loads(LABELS_PATH.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _save_img_labels(data: dict) -> None:
+    LABELS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LABELS_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _upsert_img_label(
+    labels: dict,
+    *,
+    new_rel: str,
+    old_rel: str,
+    grade: int,
+    lab: Optional[dict] = None,
+    iris_color: Optional[dict] = None,
+    confidence: Optional[float] = None,
+    manual_adjusted: bool = False,
+) -> None:
+    from datetime import datetime, timezone
+
+    if old_rel in labels and old_rel != new_rel:
+        del labels[old_rel]
+    labels[new_rel] = {
+        "grade": grade,
+        "lab": lab,
+        "iris_color": iris_color,
+        "confidence": confidence,
+        "manual_adjusted": manual_adjusted,
+        "previous_rel": old_rel if old_rel != new_rel else labels.get(new_rel, {}).get("previous_rel"),
+        "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def _decode_image(content: bytes):
     arr = np.frombuffer(content, dtype=np.uint8)
     image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if image is None:
@@ -246,6 +375,132 @@ a {{ color:#6cf; }}
 {items}
 </body></html>"""
     return HTMLResponse(html)
+
+
+@router.get("/img/list")
+def list_img_files(
+    x_debug_key: Optional[str] = Header(None, alias="X-Debug-Key"),
+    key: Optional[str] = Query(None),
+):
+    """列出 img/ 下全部图片（含子文件夹），供调试台载入与重命名。"""
+    _verify_debug_key(x_debug_key or key, load_config(CONFIG_PATH))
+    images = []
+    for rel in _list_img_files():
+        name = Path(rel).name
+        parsed = _parse_label_prefix(name)
+        images.append(
+            {
+                "rel": rel,
+                "name": name,
+                **parsed,
+            }
+        )
+    return {"images": images, "count": len(images)}
+
+
+@router.get("/img/file")
+def get_img_file(
+    rel: str = Query(...),
+    x_debug_key: Optional[str] = Header(None, alias="X-Debug-Key"),
+    key: Optional[str] = Query(None),
+):
+    """读取 img/ 内图片原文件，供调试台载入分析。"""
+    _verify_debug_key(x_debug_key or key, load_config(CONFIG_PATH))
+    path = _safe_img_rel(rel)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="image_not_found")
+    return FileResponse(path)
+
+
+@router.post("/rename-grade")
+def rename_with_grade_prefix(
+    payload: dict = Body(...),
+    x_debug_key: Optional[str] = Header(None, alias="X-Debug-Key"),
+    key: Optional[str] = Query(None),
+):
+    """将 img/ 内图片重命名为 G{n}_L{L*}_ 前缀（可选 _M_ 人工调整标记），并写入 labels/img_labels.json。"""
+    _verify_debug_key(x_debug_key or key, load_config(CONFIG_PATH))
+    rel = payload.get("rel")
+    grade = payload.get("grade")
+    lab = payload.get("lab")
+    iris_color = payload.get("iris_color")
+    confidence = payload.get("confidence")
+    l_star = payload.get("l_star")
+    manual_adjusted = bool(payload.get("manual_adjusted", False))
+    if lab and isinstance(lab, dict) and "L" in lab:
+        l_star = lab["L"]
+    if not rel:
+        raise HTTPException(status_code=400, detail="missing_rel")
+    try:
+        grade = int(grade)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="invalid_grade") from exc
+    if grade not in (1, 2, 3, 4, 5):
+        raise HTTPException(status_code=400, detail="grade_out_of_range")
+    if l_star is not None:
+        try:
+            l_star = float(l_star)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="invalid_l_star") from exc
+
+    path = _safe_img_rel(rel)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="image_not_found")
+
+    new_name = _apply_label_prefix(path.name, grade, l_star, manual_adjusted=manual_adjusted)
+    if new_name == path.name:
+        labels = _load_img_labels()
+        _upsert_img_label(
+            labels,
+            new_rel=rel,
+            old_rel=rel,
+            grade=grade,
+            lab=lab if isinstance(lab, dict) else None,
+            iris_color=iris_color if isinstance(iris_color, dict) else None,
+            confidence=float(confidence) if confidence is not None else None,
+            manual_adjusted=manual_adjusted,
+        )
+        _save_img_labels(labels)
+        return {
+            "ok": True,
+            "rel": rel,
+            "new_rel": rel,
+            "new_name": new_name,
+            "grade": grade,
+            "l_star": l_star,
+            "manual_adjusted": manual_adjusted,
+            "labels_path": str(LABELS_PATH.relative_to(ROOT)).replace("\\", "/"),
+            "message": "filename_unchanged",
+        }
+
+    new_path = path.with_name(new_name)
+    if new_path.exists():
+        raise HTTPException(status_code=409, detail="target_exists")
+
+    path.rename(new_path)
+    new_rel = new_path.relative_to(IMG_ROOT).as_posix()
+    labels = _load_img_labels()
+    _upsert_img_label(
+        labels,
+        new_rel=new_rel,
+        old_rel=rel,
+        grade=grade,
+        lab=lab if isinstance(lab, dict) else None,
+        iris_color=iris_color if isinstance(iris_color, dict) else None,
+        confidence=float(confidence) if confidence is not None else None,
+        manual_adjusted=manual_adjusted,
+    )
+    _save_img_labels(labels)
+    return {
+        "ok": True,
+        "rel": rel,
+        "new_rel": new_rel,
+        "new_name": new_name,
+        "grade": grade,
+        "l_star": l_star,
+        "manual_adjusted": manual_adjusted,
+        "labels_path": str(LABELS_PATH.relative_to(ROOT)).replace("\\", "/"),
+    }
 
 
 @router.get("/ui", response_class=HTMLResponse)

@@ -1,0 +1,673 @@
+{
+  "0716 上午/林/honor 70/G1_L59.1_裂隙灯_普通环境 (2).jpg": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.9,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 59.12,
+      "a": 19.64,
+      "b": 28.94
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/honor 70/裂隙灯_普通环境 (2).jpg",
+    "updated_at": "2026-07-16T07:01:03Z"
+  },
+  "0716 上午/林/honor 70/G1_L59.4_裂隙灯_暗 (1).jpg": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.9,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 59.36,
+      "a": 18.49,
+      "b": 27.94
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/honor 70/裂隙灯_暗 (1).jpg",
+    "updated_at": "2026-07-16T07:02:03Z"
+  },
+  "0716 上午/林/honor 70/G1_L59.8_裂隙灯_普通环境 (3).jpg": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.9,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 59.82,
+      "a": 19.17,
+      "b": 29.2
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/honor 70/裂隙灯_普通环境 (3).jpg",
+    "updated_at": "2026-07-16T07:01:40Z"
+  },
+  "0716 上午/林/honor 70/G1_L60.2_裂隙灯_普通环境 (1).jpg": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.9,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 60.19,
+      "a": 18.99,
+      "b": 27.25
+    },
+    "previous_rel": "0716 上午/林/honor 70/裂隙灯_普通环境 (1).jpg",
+    "updated_at": "2026-07-16T07:00:36Z"
+  },
+  "0716 上午/林/honor 70/G1_L61.3_裂隙灯_暗 (2).jpg": {
+    "confidence": 0.35,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.9,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 61.27,
+      "a": 16.77,
+      "b": 24.91
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/honor 70/裂隙灯_暗 (2).jpg",
+    "updated_at": "2026-07-16T07:02:20Z"
+  },
+  "0716 上午/林/honor 70/G2_L48.9_补充光_暗 (3).jpg": {
+    "confidence": 0.3,
+    "grade": 2,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.3,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 48.94,
+      "a": 2.11,
+      "b": 8.63
+    },
+    "previous_rel": "0716 上午/林/honor 70/补充光_暗 (3).jpg",
+    "updated_at": "2026-07-16T06:58:51Z"
+  },
+  "0716 上午/林/honor 70/G2_L49.5_补充光_暗 (2).jpg": {
+    "confidence": 0.3,
+    "grade": 2,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.35,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 49.51,
+      "a": 1.19,
+      "b": 6.44
+    },
+    "previous_rel": "0716 上午/林/honor 70/补充光_暗 (2).jpg",
+    "updated_at": "2026-07-16T06:58:36Z"
+  },
+  "0716 上午/林/honor 70/G2_L50.5_补充光_暗 (1).jpg": {
+    "confidence": 0.3,
+    "grade": 2,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.43,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 50.55,
+      "a": 3.88,
+      "b": 10.83
+    },
+    "previous_rel": "0716 上午/林/honor 70/补充光_暗 (1).jpg",
+    "updated_at": "2026-07-16T06:58:11Z"
+  },
+  "0716 上午/林/honor 70/G2_L51.2_补充光_普通环境 (1).jpg": {
+    "confidence": 0.3,
+    "grade": 2,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.47,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 51.16,
+      "a": 4.86,
+      "b": 5.14
+    },
+    "previous_rel": "0716 上午/林/honor 70/补充光_普通环境 (1).jpg",
+    "updated_at": "2026-07-16T06:56:32Z"
+  },
+  "0716 上午/林/honor 70/G2_L52.2_补充光_普通环境 (4).jpg": {
+    "confidence": 0.3,
+    "grade": 2,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.55,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 52.19,
+      "a": 2.19,
+      "b": 7.99
+    },
+    "previous_rel": "0716 上午/林/honor 70/补充光_普通环境 (4).jpg",
+    "updated_at": "2026-07-16T06:57:59Z"
+  },
+  "0716 上午/林/honor 70/G2_L52.2_补充光_暗 (4).jpg": {
+    "confidence": 0.3,
+    "grade": 2,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.55,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 52.21,
+      "a": 4.49,
+      "b": 6.03
+    },
+    "previous_rel": "0716 上午/林/honor 70/补充光_暗 (4).jpg",
+    "updated_at": "2026-07-16T06:59:56Z"
+  },
+  "0716 上午/林/honor 70/G2_L52.4_补充光_普通环境 (2).jpg": {
+    "confidence": 0.3,
+    "grade": 2,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.57,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 52.37,
+      "a": 5.23,
+      "b": 9.18
+    },
+    "previous_rel": "0716 上午/林/honor 70/补充光_普通环境 (2).jpg",
+    "updated_at": "2026-07-16T06:57:07Z"
+  },
+  "0716 上午/林/honor 70/G2_L52.5_补充光_普通环境 (3).jpg": {
+    "confidence": 0.3,
+    "grade": 2,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.58,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 52.52,
+      "a": 3.89,
+      "b": 6.83
+    },
+    "previous_rel": "0716 上午/林/honor 70/补充光_普通环境 (3).jpg",
+    "updated_at": "2026-07-16T06:57:51Z"
+  },
+  "0716 上午/林/iphone 15 plus/G1_L55.5_M_裂隙灯_暗 (8).png": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.77,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 55.52,
+      "a": 10.65,
+      "b": 10.91
+    },
+    "manual_adjusted": true,
+    "previous_rel": "0716 上午/林/iphone 15 plus/裂隙灯_暗 (8).png",
+    "updated_at": "2026-07-16T07:14:07Z"
+  },
+  "0716 上午/林/iphone 15 plus/G1_L57.0_裂隙灯_暗 (4).png": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.85,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 57.03,
+      "a": 12.96,
+      "b": 14.8
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/iphone 15 plus/裂隙灯_暗 (4).png",
+    "updated_at": "2026-07-16T07:12:06Z"
+  },
+  "0716 上午/林/iphone 15 plus/G1_L57.1_M_裂隙灯_暗 (5).png": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.86,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 57.1,
+      "a": 12.65,
+      "b": 15.93
+    },
+    "manual_adjusted": true,
+    "previous_rel": "0716 上午/林/iphone 15 plus/裂隙灯_暗 (5).png",
+    "updated_at": "2026-07-16T07:12:34Z"
+  },
+  "0716 上午/林/iphone 15 plus/G1_L61.5_M_裂隙灯_暗 (1).png": {
+    "confidence": 0.36,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.9,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 61.52,
+      "a": 14.61,
+      "b": 18.67
+    },
+    "manual_adjusted": true,
+    "previous_rel": "0716 上午/林/iphone 15 plus/裂隙灯_暗 (1).png",
+    "updated_at": "2026-07-16T07:09:55Z"
+  },
+  "0716 上午/林/iphone 15 plus/G1_L62.0_裂隙灯_暗 (9).png": {
+    "confidence": 0.39,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.84,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 61.96,
+      "a": 11.42,
+      "b": 15.43
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/iphone 15 plus/裂隙灯_暗 (9).png",
+    "updated_at": "2026-07-16T07:14:25Z"
+  },
+  "0716 上午/林/iphone 15 plus/G1_L62.1_M_裂隙灯_暗 (7).png": {
+    "confidence": 0.4,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.9,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 62.13,
+      "a": 15.32,
+      "b": 19.96
+    },
+    "manual_adjusted": true,
+    "previous_rel": "0716 上午/林/iphone 15 plus/裂隙灯_暗 (7).png",
+    "updated_at": "2026-07-16T07:13:34Z"
+  },
+  "0716 上午/林/iphone 15 plus/G1_L62.6_M_裂隙灯_暗 (6).png": {
+    "confidence": 0.42,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.87,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 62.64,
+      "a": 12.9,
+      "b": 16.85
+    },
+    "manual_adjusted": true,
+    "previous_rel": "0716 上午/林/iphone 15 plus/裂隙灯_暗 (6).png",
+    "updated_at": "2026-07-16T07:13:07Z"
+  },
+  "0716 上午/林/iphone 15 plus/G2_L48.7_M_裂隙灯_暗 (10).png": {
+    "confidence": 0.3,
+    "grade": 2,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.3,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 48.69,
+      "a": 12.8,
+      "b": 15.74
+    },
+    "manual_adjusted": true,
+    "previous_rel": "0716 上午/林/iphone 15 plus/裂隙灯_暗 (10).png",
+    "updated_at": "2026-07-16T07:10:38Z"
+  },
+  "0716 上午/林/iphone 15 plus/G2_L53.0_M_裂隙灯_暗 (2).png": {
+    "confidence": 0.3,
+    "grade": 2,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.62,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 53.03,
+      "a": 8.98,
+      "b": 11.97
+    },
+    "manual_adjusted": true,
+    "previous_rel": "0716 上午/林/iphone 15 plus/裂隙灯_暗 (2).png",
+    "updated_at": "2026-07-16T07:11:24Z"
+  },
+  "0716 上午/林/iphone 15 plus/G2_L54.7_M_裂隙灯_暗 (3).png": {
+    "confidence": 0.3,
+    "grade": 2,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.74,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 54.68,
+      "a": 9.05,
+      "b": 12.98
+    },
+    "manual_adjusted": true,
+    "previous_rel": "0716 上午/林/iphone 15 plus/裂隙灯_暗 (3).png",
+    "updated_at": "2026-07-16T07:11:49Z"
+  },
+  "0716 上午/林/iphone 15 plus/G3_L29.9_补充光源_暗 (2).png": {
+    "confidence": 0.3,
+    "grade": 3,
+    "iris_color": {
+      "code": "brown",
+      "confidence": 0.63,
+      "depth": "medium",
+      "hue": "brown",
+      "label": "棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；19<L*≤45（中棕）"
+    },
+    "lab": {
+      "L": 29.93,
+      "a": 6.19,
+      "b": 4.26
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/iphone 15 plus/补充光源_暗 (2).png",
+    "updated_at": "2026-07-16T07:10:11Z"
+  },
+  "0716 上午/林/iphone 15 plus/G3_L29.9_补充光源_暗 (3).png": {
+    "confidence": 0.3,
+    "grade": 3,
+    "iris_color": {
+      "code": "brown",
+      "confidence": 0.63,
+      "depth": "medium",
+      "hue": "brown",
+      "label": "棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；19<L*≤45（中棕）"
+    },
+    "lab": {
+      "L": 29.93,
+      "a": 6.19,
+      "b": 4.26
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/iphone 15 plus/补充光源_暗 (3).png",
+    "updated_at": "2026-07-16T07:07:56Z"
+  },
+  "0716 上午/林/iphone 15 plus/G3_L30.8_补充光源_暗 (1).png": {
+    "confidence": 0.3,
+    "grade": 3,
+    "iris_color": {
+      "code": "brown",
+      "confidence": 0.66,
+      "depth": "medium",
+      "hue": "brown",
+      "label": "棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；19<L*≤45（中棕）"
+    },
+    "lab": {
+      "L": 30.75,
+      "a": 5.76,
+      "b": 6.77
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/iphone 15 plus/补充光源_暗 (1).png",
+    "updated_at": "2026-07-16T07:07:29Z"
+  },
+  "0716 上午/林/iphone 15 plus/G3_L32.4_补充光源_普通环境 (4).png": {
+    "confidence": 0.3,
+    "grade": 3,
+    "iris_color": {
+      "code": "brown",
+      "confidence": 0.59,
+      "depth": "medium",
+      "hue": "brown",
+      "label": "棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；19<L*≤45（中棕）"
+    },
+    "lab": {
+      "L": 32.36,
+      "a": 2.15,
+      "b": 5.23
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/iphone 15 plus/G3_L43.4_补充光源_普通环境 (4).png",
+    "updated_at": "2026-07-16T07:07:20Z"
+  },
+  "0716 上午/林/iphone 15 plus/G3_L34.0_补充光源_普通环境 (2).png": {
+    "confidence": 0.3,
+    "grade": 3,
+    "iris_color": {
+      "code": "brown",
+      "confidence": 0.64,
+      "depth": "medium",
+      "hue": "brown",
+      "label": "棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；19<L*≤45（中棕）"
+    },
+    "lab": {
+      "L": 33.99,
+      "a": 3.74,
+      "b": 7.68
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/iphone 15 plus/补充光源_普通环境 (2).png",
+    "updated_at": "2026-07-16T07:06:07Z"
+  },
+  "0716 上午/林/iphone 15 plus/G3_L37.3_裂隙灯_普通环境 (1).png": {
+    "confidence": 0.43,
+    "grade": 3,
+    "iris_color": {
+      "code": "brown",
+      "confidence": 0.59,
+      "depth": "medium",
+      "hue": "brown",
+      "label": "棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；19<L*≤45（中棕）"
+    },
+    "lab": {
+      "L": 37.29,
+      "a": 11.76,
+      "b": 11.47
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/iphone 15 plus/裂隙灯_普通环境 (1).png",
+    "updated_at": "2026-07-16T07:08:28Z"
+  },
+  "0716 上午/林/iphone 15 plus/G3_L37.6_裂隙灯_普通环境 (2).png": {
+    "confidence": 0.41,
+    "grade": 3,
+    "iris_color": {
+      "code": "brown",
+      "confidence": 0.57,
+      "depth": "medium",
+      "hue": "brown",
+      "label": "棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；19<L*≤45（中棕）"
+    },
+    "lab": {
+      "L": 37.56,
+      "a": 13.2,
+      "b": 13.08
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/iphone 15 plus/裂隙灯_普通环境 (2).png",
+    "updated_at": "2026-07-16T07:08:41Z"
+  },
+  "0716 上午/林/iphone 15 plus/G3_L39.6_裂隙灯_普通环境 (3).png": {
+    "confidence": 0.3,
+    "grade": 3,
+    "iris_color": {
+      "code": "brown",
+      "confidence": 0.41,
+      "depth": "medium",
+      "hue": "brown",
+      "label": "棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；19<L*≤45（中棕）"
+    },
+    "lab": {
+      "L": 39.61,
+      "a": 13.53,
+      "b": 13.77
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/iphone 15 plus/裂隙灯_普通环境 (3).png",
+    "updated_at": "2026-07-16T07:08:50Z"
+  },
+  "0716 上午/林/iphone 15 plus/G3_L41.0_补充光源_普通环境 (1).png": {
+    "confidence": 0.3,
+    "grade": 3,
+    "iris_color": {
+      "code": "brown",
+      "confidence": 0.31,
+      "depth": "medium",
+      "hue": "brown",
+      "label": "棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；19<L*≤45（中棕）"
+    },
+    "lab": {
+      "L": 41.03,
+      "a": 3.9,
+      "b": 9.44
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/iphone 15 plus/补充光源_普通环境 (1).png",
+    "updated_at": "2026-07-16T07:05:56Z"
+  },
+  "0716 上午/林/iphone 15 plus/G3_L41.9_裂隙灯_普通环境 (4).png": {
+    "confidence": 0.3,
+    "grade": 3,
+    "iris_color": {
+      "code": "brown",
+      "confidence": 0.3,
+      "depth": "medium",
+      "hue": "brown",
+      "label": "棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；19<L*≤45（中棕）"
+    },
+    "lab": {
+      "L": 41.85,
+      "a": 13.77,
+      "b": 13.48
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/iphone 15 plus/裂隙灯_普通环境 (4).png",
+    "updated_at": "2026-07-16T07:09:14Z"
+  },
+  "0716 上午/林/iphone 15 plus/G3_L43.4_补充光源_普通环境 (3).png": {
+    "confidence": 0.3,
+    "grade": 3,
+    "iris_color": {
+      "code": "brown",
+      "confidence": 0.3,
+      "depth": "medium",
+      "hue": "brown",
+      "label": "棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；19<L*≤45（中棕）"
+    },
+    "lab": {
+      "L": 43.35,
+      "a": 5.51,
+      "b": 8
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/iphone 15 plus/补充光源_普通环境 (3).png",
+    "updated_at": "2026-07-16T07:07:05Z"
+  }
+}
