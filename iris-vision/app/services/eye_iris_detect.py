@@ -666,6 +666,44 @@ def _limbus_arc_score(
     return float(np.median(out - inn))
 
 
+def _outer_limbus_radius(
+    luminance: np.ndarray,
+    cx: float,
+    cy: float,
+    r_lo: float,
+    r_hi: float,
+    dr: float,
+    cos_a: np.ndarray,
+    sin_a: np.ndarray,
+    step: float,
+    min_keep_ratio: float = 0.75,
+) -> Tuple[float, float]:
+    """在固定圆心上沿半径扫角膜缘响应，取最外侧显著峰（抑制 collarette 内峰）。"""
+    rs = np.arange(r_lo, r_hi + 1e-6, max(step, 1.0))
+    if rs.size == 0:
+        mid = 0.5 * (r_lo + r_hi)
+        return mid, _limbus_arc_score(luminance, cx, cy, mid, dr, cos_a, sin_a)
+    scores = np.array(
+        [_limbus_arc_score(luminance, cx, cy, float(r), dr, cos_a, sin_a) for r in rs]
+    )
+    peak_idx = int(np.argmax(scores))
+    peak_score = float(scores[peak_idx])
+    if peak_score < 3.0:
+        return float(rs[peak_idx]), peak_score
+    # 局部峰：比两侧邻居高，且不低于全局峰的 min_keep_ratio
+    keep = peak_score * min_keep_ratio
+    chosen = peak_idx
+    for i in range(1, len(rs) - 1):
+        if scores[i] < keep:
+            continue
+        if scores[i] >= scores[i - 1] and scores[i] >= scores[i + 1]:
+            chosen = i  # 持续更新 → 最外侧局部峰
+    # 若最右端仍很高（峰被 r_hi 截断），也接纳
+    if scores[-1] >= keep and scores[-1] >= scores[-2]:
+        chosen = len(rs) - 1
+    return float(rs[chosen]), float(scores[chosen])
+
+
 def _fit_limbus(
     luminance: np.ndarray,
     scope_cx: float,
@@ -678,9 +716,10 @@ def _fit_limbus(
     Daugman 式角膜缘定位：在「圆心网格 × 半径」上最大化圆环的「外亮-内亮」响应。
 
     角膜缘是虹膜(暗)→巩膜(亮)的大圆，左右两侧最清晰。用圆环积分差在候选圆心
-    上投票，天然容忍虹膜中心相对视场中心的大偏移（实测可达 0.35r），且半径限
-    定在 [r_min_ratio, r_max_ratio]×scope_r 的窄带内、跳过正上方眼睑弧段，
-    避免中段 collarette 与巩膜过冲。返回 (cx, cy, r, confidence)。
+    上投票，天然容忍虹膜中心相对视场中心的大偏移（实测可达 0.37r），且半径限
+    定在 [r_min_ratio, r_max_ratio]×scope_r 的窄带内、跳过正上方眼睑弧段。
+    锁定圆心后沿半径再扫一次，取最外侧显著峰，避免浅色虹膜的 collarette 内峰。
+    返回 (cx, cy, r, confidence)。
     """
     # 跳过正上方 ±45°（眼皮遮挡）；图像坐标 y 向下，正上方为 270°
     angles = np.deg2rad([a for a in range(0, 360, 4) if not (225 <= a <= 315)])
@@ -700,8 +739,8 @@ def _fit_limbus(
                         best = (cx, cy, r)
         return best, best_score
 
-    # 粗搜：圆心在视场中心 ±0.35r 网格，半径在窄带内
-    span = scope_r * 0.35
+    # 粗搜：圆心在视场中心 ±0.40r 网格，半径在窄带内
+    span = scope_r * 0.40
     coarse_step = scope_r * 0.06
     cx_list = np.arange(scope_cx - span, scope_cx + span + 1, coarse_step)
     cy_list = np.arange(scope_cy - span, scope_cy + span + 1, coarse_step)
@@ -710,7 +749,7 @@ def _fit_limbus(
     if best is None:
         return None
 
-    # 细搜：在粗结果附近加密
+    # 细搜：在粗结果附近加密圆心；半径稍后单独做外侧峰选择
     bcx, bcy, br = best
     fine = scope_r * 0.06
     cx_list = np.arange(bcx - fine, bcx + fine + 1, scope_r * 0.015)
@@ -720,7 +759,10 @@ def _fit_limbus(
     if best2 is not None and best_score2 >= best_score:
         best, best_score = best2, best_score2
 
-    cx, cy, r = best
+    cx, cy, _r_seed = best
+    r, best_score = _outer_limbus_radius(
+        luminance, cx, cy, r_lo, r_hi, dr, cos_a, sin_a, step=scope_r * 0.01
+    )
     # 响应太弱说明没有清晰的虹膜/巩膜边界
     if best_score < 3.0:
         return None

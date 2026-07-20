@@ -57,6 +57,51 @@ class PreprocessResult:
 
 
 _SCOPE_DETECT_DIM = 256
+# 手机紧裁镜筒图常把暗边框裁掉，固定低阈值会把周围皮肤并进亮区导致外接圆越界失败。
+# 在多个亮度阈值上选「高填充 + 低越界 + 亮区占比适中」的最佳圆。
+_SCOPE_V_THRESHOLDS = tuple(range(8, 96, 4))
+
+
+def _scope_candidate_at_threshold(
+    gray: np.ndarray,
+    v_threshold: int,
+    skip_if_bright_ratio: float,
+    min_fill_ratio: float,
+    min_radius_ratio: float,
+    max_overflow_ratio: float = 0.12,
+) -> Optional[Tuple[float, float, float, float, float, float]]:
+    """单阈值下的视场圆候选。返回 (cx, cy, r, bright_ratio, fill, score)；失败 None。"""
+    bright = (gray > v_threshold).astype(np.uint8) * 255
+    bright_ratio = float(np.mean(bright > 0))
+    if bright_ratio >= skip_if_bright_ratio or bright_ratio < 0.08:
+        return None
+
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(bright, connectivity=8)
+    if num <= 1:
+        return None
+    idx = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    component = (labels == idx).astype(np.uint8)
+    contours, _ = cv2.findContours(component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    contour = max(contours, key=cv2.contourArea)
+    (cx, cy), r = cv2.minEnclosingCircle(contour)
+
+    sh, sw = gray.shape[:2]
+    if r < min(sh, sw) * min_radius_ratio:
+        return None
+    # 视场圆须基本落在画面内；普通特写亮区顶到边时外接圆会大幅越界
+    overflow = max(r - cx, cx + r - sw, r - cy, cy + r - sh, 0.0)
+    if overflow > r * max_overflow_ratio:
+        return None
+    fill = float(stats[idx, cv2.CC_STAT_AREA]) / max(np.pi * r * r, 1.0)
+    if fill < min_fill_ratio:
+        return None
+
+    # 镜筒图亮区占比多在 0.25~0.55；偏离越大分越低
+    br_term = 1.0 - abs(bright_ratio - 0.40) / 0.50
+    score = fill * (1.0 - overflow / max(r, 1.0)) * max(br_term, 0.1)
+    return float(cx), float(cy), float(r), bright_ratio, fill, float(score)
 
 
 def detect_scope_field(
@@ -65,12 +110,15 @@ def detect_scope_field(
     skip_if_bright_ratio: float = 0.90,
     min_fill_ratio: float = 0.55,
     min_radius_ratio: float = 0.25,
+    allow_synthetic_fallback: bool = True,
 ) -> Optional[ScopeField]:
     """
     检测镜筒亮圆视场。返回原图坐标下的视场圆；非镜筒图返回 None。
 
-    在 ~256px 小图上做亮度阈值 → 最大连通域 → 最小外接圆。
-    亮区占比过高（普通照片）或过低、圆过小、填充率过低都视为非镜筒图。
+    在 ~256px 小图上多阈值扫描亮度 → 最大连通域 → 最小外接圆，选取综合分最高者。
+    固定单阈值在「紧裁手机图」上常把皮肤并进亮区而失败；自适应阈值可找回真视场圆。
+    若仍失败但画面像紧裁眼部特写，则用画面中心 + 0.40×最短边作为弱先验（合成视场），
+    供后续角膜缘搜索使用——半径尺度与实测 iris/min_dim≈0.20 对齐后落入 0.5×scope 一带。
     """
     h, w = image_bgr.shape[:2]
     min_dim = min(h, w)
@@ -83,42 +131,50 @@ def detect_scope_field(
 
     # V 通道（BGR 最大值）判亮暗，纯黑镜筒边框远低于阈值
     gray = small.max(axis=2)
-    bright = (gray > v_threshold).astype(np.uint8) * 255
-    bright_ratio = float(np.mean(bright > 0))
-    if bright_ratio >= skip_if_bright_ratio or bright_ratio < 0.05:
-        return None
+    # 优先尝试配置阈值，再扫其余阈值（去重保序）
+    thresholds: list[int] = []
+    for vt in (int(v_threshold), *_SCOPE_V_THRESHOLDS):
+        if vt not in thresholds:
+            thresholds.append(vt)
 
-    num, labels, stats, _ = cv2.connectedComponentsWithStats(bright, connectivity=8)
-    if num <= 1:
-        return None
-    idx = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-    component = (labels == idx).astype(np.uint8)
-    # 用轮廓点做最小外接圆（几百个点），比 findNonZero 全量像素快两个数量级
-    contours, _ = cv2.findContours(component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None
-    contour = max(contours, key=cv2.contourArea)
-    (cx, cy), r = cv2.minEnclosingCircle(contour)
-
-    sh, sw = small.shape[:2]
-    if r < min(sh, sw) * min_radius_ratio:
-        return None
-    # 视场圆必须基本包含在画面内：普通特写（亮区顶到画面边缘）的外接圆
-    # 会大幅越界（30%+），据此排除；镜筒圆本身允许轻微越界（相机裁边）
-    overflow = max(r - cx, cx + r - sw, r - cy, cy + r - sh, 0.0)
-    if overflow > r * 0.12:
-        return None
-    # 填充率：亮区应基本填满外接圆（虹膜暗区允许拉低一些）
-    fill = float(stats[idx, cv2.CC_STAT_AREA]) / max(np.pi * r * r, 1.0)
-    if fill < min_fill_ratio:
-        return None
+    best: Optional[Tuple[float, float, float, float, float, float]] = None
+    for vt in thresholds:
+        cand = _scope_candidate_at_threshold(
+            gray,
+            vt,
+            skip_if_bright_ratio=skip_if_bright_ratio,
+            min_fill_ratio=min_fill_ratio,
+            min_radius_ratio=min_radius_ratio,
+        )
+        if cand is None:
+            continue
+        if best is None or cand[5] > best[5]:
+            best = cand
 
     inv = 1.0 / scale
+    if best is not None:
+        cx, cy, r, bright_ratio, _fill, _score = best
+        return ScopeField(
+            center_x=float(cx) * inv,
+            center_y=float(cy) * inv,
+            radius=float(r) * inv,
+            bright_ratio=bright_ratio,
+        )
+
+    if not allow_synthetic_fallback:
+        return None
+
+    # 紧裁特写兜底：无很低阈值看是否仍有大块非黑区（排除普通白底照片）
+    loose = (gray > max(int(v_threshold), 8)).astype(np.uint8)
+    loose_ratio = float(np.mean(loose > 0))
+    if loose_ratio < 0.35 or loose_ratio >= skip_if_bright_ratio:
+        return None
+    # 合成视场：中心取画面中心，半径取 0.40×最短边
     return ScopeField(
-        center_x=float(cx) * inv,
-        center_y=float(cy) * inv,
-        radius=float(r) * inv,
-        bright_ratio=bright_ratio,
+        center_x=float(w) * 0.5,
+        center_y=float(h) * 0.5,
+        radius=float(min_dim) * 0.40,
+        bright_ratio=loose_ratio,
     )
 
 

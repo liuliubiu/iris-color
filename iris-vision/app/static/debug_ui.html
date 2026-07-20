@@ -211,14 +211,20 @@
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      justify-content: center;
-      margin-bottom: 16px;
+      margin-bottom: 8px;
+    }
+    .label-actions {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #30363d;
+    }
+    .label-actions #btnRenameGrade {
+      width: 100%;
     }
     .rename-status {
       font-size: 12px;
       color: #8b949e;
-      text-align: center;
-      margin-bottom: 12px;
+      margin-bottom: 0;
       word-break: break-all;
     }
     .rename-status.ok { color: #3fb950; }
@@ -271,6 +277,17 @@
         开始识别并生成调试图
       </button>
 
+      <div class="label-actions" id="labelActions" hidden>
+        <div class="rename-row">
+          <button type="button" id="btnRenameGrade" disabled>标记为 G{n}_L{L*}_</button>
+        </div>
+        <label class="checkbox" id="markManualRow">
+          <input type="checkbox" id="markManual" />
+          人工调整区域（文件名加 _M_ 标记）
+        </label>
+        <div class="rename-status" id="renameStatus"></div>
+      </div>
+
       <div class="history" id="history"></div>
     </section>
 
@@ -283,14 +300,6 @@
         <div class="stages" id="stagesGrid"></div>
         <div class="result-metrics">
           <div class="grade-big" id="gradeDisplay"></div>
-          <div class="rename-row">
-            <button type="button" id="btnRenameGrade" disabled>标记为 G{n}_L{L*}_</button>
-          </div>
-          <label class="checkbox" id="markManualRow" hidden>
-            <input type="checkbox" id="markManual" />
-            人工调整区域（文件名加 _M_ 标记）
-          </label>
-          <div class="rename-status" id="renameStatus"></div>
           <div class="metrics-summary" id="metricsSummary"></div>
           <div class="metrics" id="metricsGrid"></div>
         </div>
@@ -400,11 +409,11 @@
     function updateRenameButton() {
       const btn = document.getElementById('btnRenameGrade')
       const markManual = document.getElementById('markManual')
-      const markManualRow = document.getElementById('markManualRow')
+      const labelActions = document.getElementById('labelActions')
       const lStar = lastMetrics?.lab?.L
       const canRename = Boolean(currentImgRel && lastGrade >= 1 && lastGrade <= 5 && lStar != null)
+      labelActions.hidden = !canRename
       btn.disabled = !canRename
-      markManualRow.hidden = !canRename
       const manualPart = markManual.checked ? '_M' : ''
       btn.textContent = canRename
         ? `标记为 G${lastGrade}_L${Number(lStar).toFixed(1)}${manualPart}_`

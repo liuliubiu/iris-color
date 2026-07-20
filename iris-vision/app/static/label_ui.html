@@ -33,6 +33,7 @@
   .field { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: #8b949e; }
   .field input { width: 70px; }
   .hint { font-size: 12px; color: #8b949e; }
+  kbd { display: inline-block; padding: 0 5px; border: 1px solid #30363d; border-radius: 4px; background: #21262d; font-size: 11px; font-family: inherit; color: #e6edf3; }
   .status { font-size: 12px; color: #58a6ff; }
 </style>
 </head>
@@ -43,14 +44,14 @@
   <button id="reload">载入列表</button>
   <span class="status" id="progress"></span>
   <div class="grow"></div>
-  <span class="hint">在图上「按住圆心 → 拖到边缘 → 松开」定义当前圆；滚轮微调半径</span>
+  <span class="hint">拖拽定义圆 · 滚轮调半径 · <kbd>1</kbd>/<kbd>2</kbd> 或 <kbd>Tab</kbd> 切换内外圈 · <kbd>S</kbd> 保存 · <kbd>A</kbd>/<kbd>D</kbd> 翻页</span>
 </header>
 <div class="layout">
   <div class="sidebar" id="sidebar"></div>
   <div class="main">
     <div class="toolbar">
-      <label class="radio pupil on" id="radioPupil"><input type="radio" name="target" value="pupil" checked />瞳孔（内圈·蓝）</label>
-      <label class="radio iris" id="radioIris"><input type="radio" name="target" value="iris" />虹膜（外圈·绿）</label>
+      <label class="radio pupil on" id="radioPupil"><input type="radio" name="target" value="pupil" checked />瞳孔（内圈·蓝） <kbd>1</kbd></label>
+      <label class="radio iris" id="radioIris"><input type="radio" name="target" value="iris" />虹膜（外圈·绿） <kbd>2</kbd></label>
       <span class="field">瞳孔 cx<input type="number" id="pcx" /></span>
       <span class="field">cy<input type="number" id="pcy" /></span>
       <span class="field">r<input type="number" id="pr" /></span>
@@ -261,11 +262,15 @@ $('prevBtn').onclick = () => navigate(-1);
 $('nextBtn').onclick = () => navigate(1);
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') return;
-  if (e.key === 's' || e.key === 'S') save();
-  else if (e.key === 'a' || e.key === 'A') navigate(-1);
-  else if (e.key === 'd' || e.key === 'D') navigate(1);
-  else if (e.key === '1') setTarget('pupil');
-  else if (e.key === '2') setTarget('iris');
+  if (e.key === 's' || e.key === 'S') { e.preventDefault(); save(); }
+  else if (e.key === 'a' || e.key === 'A') { e.preventDefault(); navigate(-1); }
+  else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); navigate(1); }
+  else if (e.key === '1') { e.preventDefault(); setTarget('pupil'); }
+  else if (e.key === '2') { e.preventDefault(); setTarget('iris'); }
+  else if (e.key === 'Tab') {
+    e.preventDefault();
+    setTarget(target === 'pupil' ? 'iris' : 'pupil');
+  }
 });
 
 loadList();

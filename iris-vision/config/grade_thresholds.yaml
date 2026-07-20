@@ -51,10 +51,10 @@ eye_closeup:
     min_radius_ratio: 0.25     # 视场圆半径下限（相对小图最短边）
     margin_ratio: 0.02         # 裁剪外接框边距（相对视场半径）
     # 【最关键的定位参数】虹膜半径相对视场半径的允许区间。
-    # 实测这批镜筒图 iris/scope 稳定在 0.47~0.58，留余量取 0.42~0.64；
+    # 旧批次 ~0.47~0.58；0716 手机紧裁批次在自适应视场下 ~0.46~0.64。
     # 换不同镜筒/放大倍率时需重新标定（scripts/_diag_ratios.py）。
     iris_r_min_ratio: 0.42
-    iris_r_max_ratio: 0.64
+    iris_r_max_ratio: 0.68
     # 角膜缘外扩系数：Daugman 响应峰略偏边缘内侧，×此值贴合可见虹膜外缘
     limbus_edge_scale: 1.06
 
