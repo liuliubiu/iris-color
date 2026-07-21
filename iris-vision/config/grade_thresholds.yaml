@@ -18,6 +18,48 @@ color_classification:
     # 浅: L* > b1；中: b2 < L* <= b1；深: L* <= b2；恰在边界取较深档
     boundaries: [45, 19]
 
+# 巩膜参考色彩归一化：以巩膜（眼白）为图内参考做 von Kries 对角增益校正，
+# 吸收不同手机白平衡/对焦/照度导致的整图色偏与曝光偏移（提升同人跨条件一致性）。
+# 巩膜采样失败（过曝/像素不足）时自动回退原始取色，不影响主流程。
+sclera_normalization:
+  enabled: true              # 已按 0716/0721 数据集标定（scripts/eval_sclera_norm.py）
+  # ---- 采样几何：虹膜外径的倍数环带，只取左右楔形（上下是眼皮/睫毛）----
+  ring_inner_scale: 1.10
+  ring_outer_scale: 1.60
+  wedge_half_angle_deg: 55.0
+  scope_max_ratio: 0.92      # 收缩到视场半径的比例内，避开视场边缘渐晕
+  # ---- 像素过滤 ----
+  v_min: 100.0               # 亮度下限（剔除睫毛/阴影）
+  s_max: 70.0                # 饱和度上限（剔除皮肤）
+  rg_diff_max: 30.0          # R-G 差上限（剔除血管等偏红像素）
+  clip_v: 250.0              # 任一通道达到此值视为削波，剔除且计入 clipped_ratio
+  clipped_ratio_max: 0.50    # 削波占比超过此值视为巩膜过曝，参考不可用
+  min_pixels: 500            # 有效巩膜像素下限
+  sample_cap: 50000          # 中值统计抽样上限（固定种子）
+  side_v_gap: 25.0           # 左右楔形亮度中位数差超过此值时只用更亮一侧
+                             # （裂隙灯窄光束下单侧巩膜常在阴影里）；0=关闭
+  bright_percentile: 75.0    # 只保留 V 高于此分位数的巩膜像素：被照亮的巩膜才
+                             # 与虹膜受到的照明对应，阴影里的巩膜会引入增益噪声；0=关闭
+  mad_trim: 2.5              # 按 V 中位数 ± N×MAD 修剪残余阴影/亮斑；0=关闭
+  # ---- 校正目标 ----
+  target_l: 88.0             # 校正后巩膜目标 L*（取数据集巩膜 L* 中位数标定）
+  normalize_luminance: true  # 归一曝光（对 grade 稳定性贡献最大）
+  normalize_chroma: true     # 归一色偏（稳定蓝/绿/棕分类）
+  luminance_strength: 0.6    # 亮度校正强度：1=全量校正到 target_l，0.5=校正一半
+                             # （巩膜受照本身有波动，部分校正可少放大巩膜采样噪声；
+                             # 0716/0721 数据集上 0.6 综合最优：σL 收窄且 grade 不翻转）
+  lum_gain_min: 0.5          # 亮度增益截断范围（防止极端巩膜值导致过度提亮/压暗）
+  lum_gain_max: 2.0
+  gain_min: 0.25             # 增益超出此区间视为参考不可靠，放弃校正
+  gain_max: 4.0
+  # ---- 瞳孔黑参考（仿射模型，可选）----
+  # 瞳孔本应接近纯黑；实测偏亮部分 ≈ 对焦不实/镜头炫光的加性雾。
+  # 开启后先扣掉该偏置再做增益：corrected = (pixel - offset) x gain
+  use_pupil_black: false
+  pupil_radius_scale: 0.7    # 取瞳孔半径×此比例的内圈（避开边缘过渡带）
+  pupil_black_percentile: 25.0  # 取线性 RGB 低分位数（避开瞳孔内反光亮斑）
+  pupil_min_pixels: 50
+
 # 眼部特写（镜筒图）：瞳孔 → 虹膜环带定位与取色
 eye_closeup:
   # ---- 阶段A 精定位（清晰小图；瞳孔与虹膜可分离时用）----

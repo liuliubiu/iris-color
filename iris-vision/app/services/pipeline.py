@@ -23,6 +23,12 @@ from app.services.color import (
 from app.services.grade import GradeResult, grade_from_l_star
 from app.services.iris_detect import IrisDetectionResult, build_manual_iris_detection, detect_iris_ring_mask
 from app.services.quality import QualityResult, check_quality
+from app.services.sclera import (
+    ScleraReference,
+    compute_channel_gains,
+    extract_pupil_black_offset,
+    extract_sclera_reference,
+)
 from app.services.scope_field import ImageTransform, ScopeField, preprocess_capture
 
 
@@ -40,6 +46,9 @@ class AnalysisPipelineResult:
     work_image: np.ndarray
     transform: ImageTransform
     scope: Optional[ScopeField] = None
+    sclera: Optional[ScleraReference] = None
+    sclera_gains: Optional[np.ndarray] = None
+    sclera_status: str = "disabled"
 
 
 class AnalysisError(Exception):
@@ -148,6 +157,25 @@ def run_analysis(
     if int(sampling.valid.sum()) < min_pixels:
         raise AnalysisError("no_valid_pixels_after_highlight_removal", quality)
 
+    # 巩膜参考色彩归一化：以巩膜为图内参考求增益，吸收设备色偏与照度差；
+    # 可选以瞳孔为黑参考扣掉雾状眩光/底噪的加性偏置（仿射模型）
+    sclera_cfg = config.get("sclera_normalization", {}) or {}
+    sclera_ref: Optional[ScleraReference] = None
+    sclera_gains: Optional[np.ndarray] = None
+    black_offset: Optional[np.ndarray] = None
+    sclera_status = "disabled"
+    if sclera_cfg.get("enabled", False):
+        sclera_ref = extract_sclera_reference(work, detection, scope, sclera_cfg)
+        if sclera_ref.ok:
+            if sclera_cfg.get("use_pupil_black", False):
+                black_offset = extract_pupil_black_offset(work, detection, sclera_cfg)
+            sclera_gains, gain_status = compute_channel_gains(
+                sclera_ref, sclera_cfg, black_offset=black_offset
+            )
+            sclera_status = "applied" if sclera_gains is not None else gain_status
+        else:
+            sclera_status = sclera_ref.reason
+
     color_sample_cap = int(eye_closeup_cfg.get("color_sample_cap", 20000))
     # MAD 鲁棒修剪仅对镜筒特写启用，避免改变普通图既有取色基线
     mad_trim = float(eye_closeup_cfg.get("color_trim_mad", 2.5)) if scope is not None else 0.0
@@ -158,6 +186,8 @@ def run_analysis(
         sample_cap=color_sample_cap,
         masks=sampling,
         mad_trim=mad_trim,
+        channel_gains=sclera_gains,
+        black_offset=black_offset if sclera_gains is not None else None,
     )
     grade = grade_from_l_star(lab.L, config_path)
     iris_color = classify_iris_color(lab, config)
@@ -173,4 +203,7 @@ def run_analysis(
         work_image=work,
         transform=transform,
         scope=scope,
+        sclera=sclera_ref,
+        sclera_gains=sclera_gains,
+        sclera_status=sclera_status,
     )

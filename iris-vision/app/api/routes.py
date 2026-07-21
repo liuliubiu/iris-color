@@ -16,6 +16,7 @@ from app.models.schemas import (
     IrisColorInfo,
     LabValues,
     QualityInfo,
+    ScleraNormalizationInfo,
 )
 from app.services.debug_viz import build_debug_images, images_to_base64
 from app.services.pipeline import AnalysisError, load_config, run_analysis
@@ -68,6 +69,29 @@ def _build_result_debug_images(result, config: dict) -> dict:
     return images_to_base64(wanted)
 
 
+def _build_sclera_info(result) -> Optional[ScleraNormalizationInfo]:
+    """巩膜归一化信息；功能关闭时返回 None。"""
+    if result.sclera_status == "disabled" and result.sclera is None:
+        return None
+    sclera = result.sclera
+    lab = None
+    if sclera is not None and sclera.lab is not None:
+        lab = LabValues(
+            L=round(sclera.lab[0], 2),
+            a=round(sclera.lab[1], 2),
+            b=round(sclera.lab[2], 2),
+        )
+    gains = None
+    if result.sclera_gains is not None:
+        gains = [round(float(g), 4) for g in result.sclera_gains]
+    return ScleraNormalizationInfo(
+        applied=result.sclera_status == "applied",
+        status=result.sclera_status,
+        lab=lab,
+        gains=gains,
+    )
+
+
 def _to_analysis_response(result, image_bgr: np.ndarray, config: dict) -> AnalysisResponse:
     det = result.detection
     transform = result.transform
@@ -109,6 +133,7 @@ def _to_analysis_response(result, image_bgr: np.ndarray, config: dict) -> Analys
         grade=result.grade.grade,
         confidence=result.grade.confidence,
         detection_method=result.detection.method,
+        sclera_normalization=_build_sclera_info(result),
     )
 
 

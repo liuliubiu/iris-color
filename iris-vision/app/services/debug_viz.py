@@ -169,6 +169,49 @@ def draw_valid_samples(
     return out
 
 
+def draw_sclera_samples(
+    image_bgr: np.ndarray,
+    pipeline: AnalysisPipelineResult,
+) -> np.ndarray:
+    """
+    图 6：巩膜参考采样区
+    - 品红高亮：参与巩膜参考色统计的像素
+    - 黄圆：巩膜采样环带内/外边界
+    - 顶部文字：状态 + 巩膜 Lab + 增益
+    """
+    out = image_bgr.copy()
+    sclera = pipeline.sclera
+    if sclera is None:
+        cv2.putText(out, "sclera normalization disabled", (12, 28),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2, cv2.LINE_AA)
+        return out
+
+    cx, cy = pipeline.detection.center
+    if sclera.outer_radius > 0:
+        cv2.circle(out, (cx, cy), int(sclera.inner_radius), (0, 255, 255), 2)
+        cv2.circle(out, (cx, cy), int(sclera.outer_radius), (0, 255, 255), 2)
+
+    if sclera.mask is not None:
+        overlay = out.copy()
+        mask = sclera.mask > 0
+        overlay[mask] = (overlay[mask] * 0.35 + np.array([255, 0, 255]) * 0.65).astype(np.uint8)
+        out = cv2.addWeighted(overlay, 0.65, out, 0.35, 0)
+
+    status = pipeline.sclera_status
+    color = (0, 255, 0) if status == "applied" else (0, 0, 255)
+    cv2.putText(out, f"sclera status={status} pixels={sclera.pixel_count} "
+                     f"clipped={sclera.clipped_ratio:.2f}",
+                (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
+    if sclera.lab is not None:
+        line = f"sclera Lab=({sclera.lab[0]:.1f}, {sclera.lab[1]:.1f}, {sclera.lab[2]:.1f})"
+        if pipeline.sclera_gains is not None:
+            g = pipeline.sclera_gains
+            line += f" gains=({g[0]:.3f}, {g[1]:.3f}, {g[2]:.3f})"
+        cv2.putText(out, line, (12, 54),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+    return out
+
+
 def _shrink_to_max_dim(image_bgr: np.ndarray, max_dim: int) -> np.ndarray:
     """最长边超过 max_dim 时等比缩小（仅用于展示/编码，坐标语义不变）。"""
     if max_dim <= 0:
@@ -204,6 +247,8 @@ def build_debug_images(
         "04_valid_samples": draw_valid_samples(image_bgr, pipeline.sampling),
         "05_ring_mask_only": cv2.applyColorMap(pipeline.detection.mask, cv2.COLORMAP_JET),
     }
+    if pipeline.sclera is not None:
+        images["06_sclera_samples"] = draw_sclera_samples(image_bgr, pipeline)
     return {name: _shrink_to_max_dim(img, max_dim) for name, img in images.items()}
 
 
@@ -274,6 +319,19 @@ def build_debug_metrics(pipeline: AnalysisPipelineResult, highlight_v: int) -> d
         },
         "grade": pipeline.grade.grade,
         "confidence": pipeline.grade.confidence,
+        "sclera_normalization": {
+            "status": pipeline.sclera_status,
+            "applied": pipeline.sclera_status == "applied",
+            "lab": {
+                "L": round(pipeline.sclera.lab[0], 2),
+                "a": round(pipeline.sclera.lab[1], 2),
+                "b": round(pipeline.sclera.lab[2], 2),
+            } if pipeline.sclera is not None and pipeline.sclera.lab is not None else None,
+            "gains": [round(float(g), 4) for g in pipeline.sclera_gains]
+            if pipeline.sclera_gains is not None else None,
+            "pixel_count": pipeline.sclera.pixel_count if pipeline.sclera is not None else 0,
+            "clipped_ratio": pipeline.sclera.clipped_ratio if pipeline.sclera is not None else 0.0,
+        },
     }
 
 

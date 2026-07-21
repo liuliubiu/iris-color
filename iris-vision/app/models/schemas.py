@@ -33,6 +33,15 @@ class DetectionInfo(BaseModel):
     method: str = Field(..., description="定位方式")
 
 
+class ScleraNormalizationInfo(BaseModel):
+    """巩膜参考色彩归一化结果。"""
+
+    applied: bool = Field(..., description="是否成功应用巩膜参考校正")
+    status: str = Field(..., description="applied / disabled / 失败原因")
+    lab: Optional[LabValues] = Field(None, description="巩膜参考色 CIELAB（校正前）")
+    gains: Optional[List[float]] = Field(None, description="线性 RGB 对角增益 [R, G, B]")
+
+
 class QualityInfo(BaseModel):
     """图像质量检测结果。"""
 
@@ -57,6 +66,9 @@ class AnalysisResponse(BaseModel):
     detection_method: str = Field(
         "eye_closeup",
         description="虹膜定位方式：eye_closeup 或 face_landmark",
+    )
+    sclera_normalization: Optional[ScleraNormalizationInfo] = Field(
+        None, description="巩膜参考色彩归一化信息（功能关闭时为 null）"
     )
     message: str = "provisional thresholds, calibration required"
 

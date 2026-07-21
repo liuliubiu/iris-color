@@ -72,6 +72,19 @@ _DEPTH_LABEL_PREFIX = {
 }
 
 
+def srgb_to_linear(c: np.ndarray) -> np.ndarray:
+    """sRGB（0..1）→ 线性 RGB。"""
+    c = np.asarray(c, dtype=np.float64)
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def linear_to_srgb(c: np.ndarray) -> np.ndarray:
+    """线性 RGB（0..1）→ sRGB。"""
+    c = np.asarray(c, dtype=np.float64)
+    c = np.clip(c, 0.0, 1.0)
+    return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1.0 / 2.4) - 0.055)
+
+
 def compute_sampling_masks(
     image_bgr: np.ndarray,
     mask: np.ndarray,
@@ -151,6 +164,8 @@ def extract_iris_lab_median(
     sample_cap: int = 0,
     masks: Optional[SamplingMasks] = None,
     mad_trim: float = 0.0,
+    channel_gains: Optional[np.ndarray] = None,
+    black_offset: Optional[np.ndarray] = None,
 ) -> LabResult:
     """在 mask 区域内取色，剔除高光，返回 CIELAB 中位数。
 
@@ -159,6 +174,9 @@ def extract_iris_lab_median(
     中位数对抽样稳健，大图可省去十几万像素的 colorspacious 转换，显著提速。
     mad_trim > 0 时按 L* 中位数 ± mad_trim×MAD 修剪离群像素（睫毛暗像素、
     残余高光）后再取中位数。
+    channel_gains 非空时对采样像素做线性 RGB 仿射校正（巩膜参考归一化）：
+    sRGB→线性→减 black_offset（雾状眩光/底噪）→逐通道乘增益→clip→回 sRGB，
+    再转 CIELAB。
     """
     if masks is None:
         masks = compute_sampling_masks(image_bgr, mask, highlight_v_threshold)
@@ -174,6 +192,12 @@ def extract_iris_lab_median(
         pixels_bgr = pixels_bgr[idx]
 
     pixels_rgb = pixels_bgr[:, ::-1].astype(np.float64) / 255.0
+    if channel_gains is not None:
+        linear = srgb_to_linear(pixels_rgb)
+        if black_offset is not None:
+            linear = linear - np.asarray(black_offset, dtype=np.float64)
+        linear = np.clip(linear * np.asarray(channel_gains, dtype=np.float64), 0.0, 1.0)
+        pixels_rgb = linear_to_srgb(linear)
     lab_array = colorspacious.cspace_convert(pixels_rgb, "sRGB1", "CIELab")
 
     if mad_trim > 0 and len(lab_array) >= 100:
