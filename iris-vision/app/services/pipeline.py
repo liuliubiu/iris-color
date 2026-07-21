@@ -1,6 +1,7 @@
 """分析流水线：供正式接口与调试接口共用。
 
-流程：预处理（视场裁剪+统一工作分辨率）→ 质量检测 → 定位 → 遮挡剔除 → 取色 → 分档。
+流程：预处理（视场裁剪+统一工作分辨率）→ 质量检测 → 定位 → 遮挡剔除
+→（可选）巩膜参考白平衡 → 取色 → 分档。
 内部全部在「工作图」坐标系执行；对外接口的坐标经 transform 换算回原图。
 """
 
@@ -24,6 +25,7 @@ from app.services.grade import GradeResult, grade_from_l_star
 from app.services.iris_detect import IrisDetectionResult, build_manual_iris_detection, detect_iris_ring_mask
 from app.services.quality import QualityResult, check_quality
 from app.services.scope_field import ImageTransform, ScopeField, preprocess_capture
+from app.services.sclera_wb import ScleraWbResult, correct_with_sclera_wb
 
 
 @dataclass
@@ -40,6 +42,9 @@ class AnalysisPipelineResult:
     work_image: np.ndarray
     transform: ImageTransform
     scope: Optional[ScopeField] = None
+    sclera_wb: Optional[ScleraWbResult] = None
+    lab_before_wb: Optional[LabResult] = None
+    grade_before_wb: Optional[GradeResult] = None
 
 
 class AnalysisError(Exception):
@@ -144,15 +149,50 @@ def run_analysis(
     if detection.sample_pixel_count < min_pixels:
         raise AnalysisError("insufficient_iris_samples", quality)
 
-    sampling = compute_sampling_masks(work, detection.mask, highlight_v)
-    if int(sampling.valid.sum()) < min_pixels:
-        raise AnalysisError("no_valid_pixels_after_highlight_removal", quality)
-
     color_sample_cap = int(eye_closeup_cfg.get("color_sample_cap", 20000))
     # MAD 鲁棒修剪仅对镜筒特写启用，避免改变普通图既有取色基线
     mad_trim = float(eye_closeup_cfg.get("color_trim_mad", 2.5)) if scope is not None else 0.0
+
+    # 巩膜参考白平衡：定位用原图，取色用校正副本（默认关闭，见 sclera_wb.enabled）
+    sclera_wb_cfg = eye_closeup_cfg.get("sclera_wb", {})
+    lab_before_wb: Optional[LabResult] = None
+    grade_before_wb: Optional[GradeResult] = None
+    sclera_wb_result: Optional[ScleraWbResult] = None
+    color_work = work
+
+    if sclera_wb_cfg.get("enabled", False):
+        # 校正前基线：便于 A/B 与调试对比
+        sampling_before = compute_sampling_masks(work, detection.mask, highlight_v)
+        if int(sampling_before.valid.sum()) >= min_pixels:
+            lab_before_wb = extract_iris_lab_median(
+                work,
+                detection.mask,
+                highlight_v,
+                sample_cap=color_sample_cap,
+                masks=sampling_before,
+                mad_trim=mad_trim,
+            )
+            grade_before_wb = grade_from_l_star(lab_before_wb.L, config_path)
+
+        iris_r = float(
+            detection.outer_radius
+            if detection.outer_radius is not None
+            else detection.radius
+        )
+        color_work, sclera_wb_result = correct_with_sclera_wb(
+            work,
+            (float(detection.center[0]), float(detection.center[1])),
+            iris_r,
+            sclera_wb_cfg,
+            scope=scope,
+        )
+
+    sampling = compute_sampling_masks(color_work, detection.mask, highlight_v)
+    if int(sampling.valid.sum()) < min_pixels:
+        raise AnalysisError("no_valid_pixels_after_highlight_removal", quality)
+
     lab = extract_iris_lab_median(
-        work,
+        color_work,
         detection.mask,
         highlight_v,
         sample_cap=color_sample_cap,
@@ -170,7 +210,10 @@ def run_analysis(
         grade=grade,
         iris_color=iris_color,
         detection_mode=detection_mode,
-        work_image=work,
+        work_image=color_work,
         transform=transform,
         scope=scope,
+        sclera_wb=sclera_wb_result,
+        lab_before_wb=lab_before_wb,
+        grade_before_wb=grade_before_wb,
     )

@@ -58,6 +58,24 @@ eye_closeup:
     # 角膜缘外扩系数：Daugman 响应峰略偏边缘内侧，×此值贴合可见虹膜外缘
     limbus_edge_scale: 1.06
 
+  # ---- 巩膜参考白平衡（试点）：取色前将巩膜映射到统一近白 ----
+  # 默认关闭，用 scripts/eval_sclera_wb.py 做同人多条件 A/B 后再决定开启与重标定。
+  sclera_wb:
+    enabled: true
+    inner_ratio: 1.08          # 采样环内缘（相对虹膜外半径）
+    outer_ratio: 1.28          # 采样环外缘
+    v_min: 150.0               # 偏白：亮度下限
+    s_max: 60.0                # 偏白：饱和度上限
+    highlight_v: 245.0         # 剔除极高光
+    vessel_rg_max: 35.0        # 剔除偏红血管：R-G 上限
+    vessel_rb_max: 40.0        # 剔除偏红血管：R-B 上限
+    min_pixels: 80             # 有效巩膜像素下限，不足则跳过
+    clip_channel_min: 250.0    # 通道贴顶判定
+    max_clipped_ratio: 0.35    # 贴顶像素占比超此值跳过校正
+    target_srgb: [0.92, 0.92, 0.90]  # 目标近白（R,G,B，略暖）
+    gain_min: 0.5
+    gain_max: 2.0
+
   # ---- 环带扇区遮挡剔除：砍掉眼皮/睫毛/反光楔形区 ----
   ring_sectors:
     enabled: true

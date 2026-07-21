@@ -669,5 +669,245 @@
     "manual_adjusted": false,
     "previous_rel": "0716 上午/林/iphone 15 plus/补充光源_普通环境 (3).png",
     "updated_at": "2026-07-16T07:07:05Z"
+  },
+  "0721上午/iphone/李/G1_L59.1_组1-1.jpg": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.72,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 59.12,
+      "a": 6.58,
+      "b": 10.79
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0721上午/iphone/李/组1-1.jpg",
+    "updated_at": "2026-07-21T04:11:05Z"
+  },
+  "0721上午/iphone/李/G1_L60.0_组1-2.jpg": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.72,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 59.95,
+      "a": 7.21,
+      "b": 10.77
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0721上午/iphone/李/组1-2.jpg",
+    "updated_at": "2026-07-21T04:11:27Z"
+  },
+  "0721上午/iphone/李/G2_L45.5_组2-2.jpg": {
+    "confidence": 0.3,
+    "grade": 2,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.3,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 45.5,
+      "a": 4.02,
+      "b": 4.96
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0721上午/iphone/李/组2-2.jpg",
+    "updated_at": "2026-07-21T04:12:06Z"
+  },
+  "0721上午/iphone/李/G2_L54.9_组2-1.jpg": {
+    "confidence": 0.3,
+    "grade": 2,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.65,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 54.9,
+      "a": 5.69,
+      "b": 6.22
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0721上午/iphone/李/组2-1.jpg",
+    "updated_at": "2026-07-21T04:11:56Z"
+  },
+  "0721上午/iphone/李/G3_L37.1_组2-3.jpg": {
+    "confidence": 0.44,
+    "grade": 3,
+    "iris_color": {
+      "code": "brown",
+      "confidence": 0.57,
+      "depth": "medium",
+      "hue": "brown",
+      "label": "棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；19<L*≤45（中棕）"
+    },
+    "lab": {
+      "L": 37.12,
+      "a": 3.31,
+      "b": 2.34
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0721上午/iphone/李/组2-3.jpg",
+    "updated_at": "2026-07-21T04:12:51Z"
+  },
+  "0721上午/iphone/林/G1_L56.8_M_组2-1.jpg": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.75,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 56.84,
+      "a": 6.63,
+      "b": 13.26
+    },
+    "manual_adjusted": true,
+    "previous_rel": "0721上午/iphone/林/组2-1.jpg",
+    "updated_at": "2026-07-21T04:13:59Z"
+  },
+  "0721上午/iphone/林/G1_L57.9_组2-2.jpg": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.75,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 57.87,
+      "a": 7.37,
+      "b": 12.96
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0721上午/iphone/林/组2-2.jpg",
+    "updated_at": "2026-07-21T04:14:16Z"
+  },
+  "0721上午/iphone/林/G1_L58.5_组2-3.jpg": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.76,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 58.53,
+      "a": 7.54,
+      "b": 12.94
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0721上午/iphone/林/组2-3.jpg",
+    "updated_at": "2026-07-21T04:14:23Z"
+  },
+  "0721上午/iphone/林/G1_L61.9_组1-1.jpg": {
+    "confidence": 0.38,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.77,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 61.87,
+      "a": 7.93,
+      "b": 13.77
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0721上午/iphone/林/组1-1.jpg",
+    "updated_at": "2026-07-21T04:13:05Z"
+  },
+  "0721上午/iphone/林/G1_L62.0_组1-2.jpg": {
+    "confidence": 0.39,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.78,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 62,
+      "a": 8.46,
+      "b": 13.9
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0721上午/iphone/林/组1-2.jpg",
+    "updated_at": "2026-07-21T04:13:27Z"
+  },
+  "0721上午/iphone/林/G2_L48.1_组1-4.jpg": {
+    "confidence": 0.3,
+    "grade": 2,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.3,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 48.11,
+      "a": 10.42,
+      "b": 13.36
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0721上午/iphone/林/组1-4.jpg",
+    "updated_at": "2026-07-21T04:13:42Z"
+  },
+  "0721上午/iphone/林/G3_L42.7_组1-3.jpg": {
+    "confidence": 0.3,
+    "grade": 3,
+    "iris_color": {
+      "code": "brown",
+      "confidence": 0.3,
+      "depth": "medium",
+      "hue": "brown",
+      "label": "棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；19<L*≤45（中棕）"
+    },
+    "lab": {
+      "L": 42.71,
+      "a": 7.87,
+      "b": 9.36
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0721上午/iphone/林/组1-3.jpg",
+    "updated_at": "2026-07-21T04:13:34Z"
   }
 }

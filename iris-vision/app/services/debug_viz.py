@@ -274,7 +274,48 @@ def build_debug_metrics(pipeline: AnalysisPipelineResult, highlight_v: int) -> d
         },
         "grade": pipeline.grade.grade,
         "confidence": pipeline.grade.confidence,
+        "sclera_wb": _sclera_wb_metrics(pipeline),
     }
+
+
+def _sclera_wb_metrics(pipeline: AnalysisPipelineResult) -> Optional[dict]:
+    """巩膜白平衡调试字段；未启用时为 None。"""
+    wb = pipeline.sclera_wb
+    if wb is None and pipeline.lab_before_wb is None:
+        return None
+    out: dict = {}
+    if wb is not None:
+        out.update(
+            {
+                "applied": wb.applied,
+                "reason": wb.reason,
+                "pixel_count": wb.pixel_count,
+                "clipped_ratio": round(wb.clipped_ratio, 4),
+                "median_bgr": (
+                    [round(v, 2) for v in wb.median_bgr] if wb.median_bgr else None
+                ),
+                "gains_bgr": (
+                    [round(v, 4) for v in wb.gains_bgr] if wb.gains_bgr else None
+                ),
+                "gain_clamped": wb.gain_clamped,
+            }
+        )
+    if pipeline.lab_before_wb is not None:
+        out["lab_before"] = {
+            "L": round(pipeline.lab_before_wb.L, 2),
+            "a": round(pipeline.lab_before_wb.a, 2),
+            "b": round(pipeline.lab_before_wb.b, 2),
+        }
+    if pipeline.grade_before_wb is not None:
+        out["grade_before"] = pipeline.grade_before_wb.grade
+        out["confidence_before"] = pipeline.grade_before_wb.confidence
+    out["lab_after"] = {
+        "L": round(pipeline.lab.L, 2),
+        "a": round(pipeline.lab.a, 2),
+        "b": round(pipeline.lab.b, 2),
+    }
+    out["grade_after"] = pipeline.grade.grade
+    return out
 
 
 def save_debug_run(
