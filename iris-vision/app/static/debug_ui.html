@@ -162,6 +162,65 @@
       color: #c9d1d9;
     }
     .stage img { width: 100%; display: block; background: #000; }
+    .stage.wide { grid-column: 1 / -1; }
+    .stage.wide img { max-height: 560px; object-fit: contain; background: #0d1117; }
+    .color-compare {
+      margin: 0 0 16px;
+      padding: 14px;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      background: #0d1117;
+    }
+    .color-compare > h3 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      color: #c9d1d9;
+    }
+    .color-compare .cc-meta {
+      font-size: 12px;
+      color: #8b949e;
+      margin-bottom: 12px;
+      line-height: 1.5;
+    }
+    .color-compare .cc-meta .ok { color: #3fb950; }
+    .color-compare .cc-meta .warn { color: #d29922; }
+    .cc-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 700px) {
+      .cc-grid { grid-template-columns: 1fr; }
+    }
+    .cc-card {
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #161b22;
+    }
+    .cc-card .cc-head {
+      padding: 8px 10px;
+      font-size: 13px;
+      font-weight: 600;
+      border-bottom: 1px solid #30363d;
+      color: #e6edf3;
+    }
+    .cc-card .cc-swatch {
+      height: 72px;
+      border-bottom: 1px solid #30363d;
+    }
+    .cc-card .cc-body {
+      padding: 10px;
+      font-size: 13px;
+      line-height: 1.55;
+      color: #c9d1d9;
+    }
+    .cc-card .cc-body strong { color: #58a6ff; }
+    .cc-delta {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #8b949e;
+    }
     .empty { color: #8b949e; text-align: center; padding: 40px 16px; }
     .run-meta { font-size: 12px; color: #8b949e; margin-bottom: 12px; }
     .history { margin-top: 12px; font-size: 12px; }
@@ -297,6 +356,7 @@
       <div id="errorBox" class="error" hidden></div>
       <div id="resultContent" hidden>
         <div class="run-meta" id="runMeta"></div>
+        <div class="color-compare" id="colorCompare" hidden></div>
         <div class="stages" id="stagesGrid"></div>
         <div class="result-metrics">
           <div class="grade-big" id="gradeDisplay"></div>
@@ -361,6 +421,8 @@
 
     const STAGE_LABELS = {
       '00_original': '原图',
+      '07_sclera_before_after': '巩膜调色前 / 调色后（裁切 + Lab 色块）',
+      '06_sclera_samples': '巩膜参考采样（品红=采样像素）',
       '01_pupil_candidates': '瞳孔候选（黄=极暗候选区域）',
       '01_pupil_localization': '瞳孔定位（黄框=搜索区，蓝圆=瞳孔）',
       '02_iris_ring': '虹膜环带（绿=外缘，红=内缘）',
@@ -702,7 +764,52 @@
       return `<div class="metric"><div class="k">${safeLabel}</div><div class="${valueClass}"${title}>${safeValue}</div></div>`
     }
 
+    function renderColorCompare(m) {
+      const el = document.getElementById('colorCompare')
+      const cc = m?.color_correction
+      if (!cc?.before || !cc?.after) {
+        el.hidden = true
+        el.innerHTML = ''
+        return
+      }
+      const fmtLab = (lab) => `L* ${lab.L} / a* ${lab.a} / b* ${lab.b}`
+      const sideCard = (title, side) => `
+        <div class="cc-card">
+          <div class="cc-head">${title}</div>
+          <div class="cc-swatch" style="background:${side.hex || '#333'}"></div>
+          <div class="cc-body">
+            <div><strong>Grade ${side.grade}</strong> · ${escapeHtml(side.iris_color?.label || '-')}</div>
+            <div>${escapeHtml(fmtLab(side.lab))}</div>
+            <div>hex ${escapeHtml(side.hex || '-')}</div>
+          </div>
+        </div>`
+      const statusCls = cc.applied ? 'ok' : 'warn'
+      const statusText = cc.applied ? `已应用校正（${escapeHtml(cc.status)}）` : `未应用校正（${escapeHtml(cc.status)}）`
+      const gains = cc.gains ? `gains=[${cc.gains.map((g) => Number(g).toFixed(3)).join(', ')}]` : 'gains=-'
+      const sclera = cc.sclera_lab
+        ? `巩膜 Lab=(${cc.sclera_lab.L}, ${cc.sclera_lab.a}, ${cc.sclera_lab.b})`
+        : '巩膜 Lab=-'
+      const d = cc.delta || {}
+      el.innerHTML = `
+        <h3>巩膜调色前 / 调色后</h3>
+        <div class="cc-meta">
+          <span class="${statusCls}">${statusText}</span><br/>
+          ${escapeHtml(gains)} · ${escapeHtml(sclera)}
+        </div>
+        <div class="cc-grid">
+          ${sideCard('调色前（原始取色）', cc.before)}
+          ${sideCard('调色后（巩膜归一化）', cc.after)}
+        </div>
+        <div class="cc-delta">
+          ΔL*=${d.L ?? '-'}　Δa*=${d.a ?? '-'}　Δb*=${d.b ?? '-'}　
+          Grade${d.grade_changed ? '有变化' : '不变'}　
+          颜色${d.color_changed ? '有变化' : '不变'}
+        </div>`
+      el.hidden = false
+    }
+
     function renderMetrics(m) {
+      const sn = m.sclera_normalization || {}
       const summaryItems = [
         ['Grade', m.grade],
         ['虹膜颜色', m.iris_color?.label],
@@ -714,6 +821,8 @@
         ['L*', m.lab?.L],
         ['a*', m.lab?.a],
         ['b*', m.lab?.b],
+        ['巩膜校正', sn.applied ? '已应用' : (sn.status || '-')],
+        ['巩膜增益', sn.gains ? sn.gains.map((g) => Number(g).toFixed(3)).join(', ') : '-'],
         ['定位方式', m.detection_method],
         ['瞳孔方法', m.pupil_method],
         ['虹膜外缘方法', m.iris_outer_method],
@@ -752,7 +861,10 @@
       const order = Object.keys(STAGE_LABELS)
       document.getElementById('stagesGrid').innerHTML = order
         .filter((k) => imageSources[k])
-        .map((k) => `<div class="stage"><h3>${STAGE_LABELS[k]}</h3><img src="${imageSources[k]}" alt="${k}"/></div>`)
+        .map((k) => {
+          const wide = k === '07_sclera_before_after' ? ' wide' : ''
+          return `<div class="stage${wide}"><h3>${STAGE_LABELS[k]}</h3><img src="${imageSources[k]}" alt="${k}"/></div>`
+        })
         .join('')
     }
 
@@ -809,6 +921,7 @@
             : '未保存到本地；阶段图由本次响应直接展示'
         updateRenameButton()
         const imageSources = imageSourcesFromResponse(data)
+        renderColorCompare(data.metrics)
         renderMetrics(data.metrics)
         renderStages(imageSources)
         setupManualEditor(data.metrics, imageSources['00_original'])
@@ -859,6 +972,7 @@
             : '未保存到本地；阶段图由本次响应直接展示 | 人工调整'
         updateRenameButton()
         const imageSources = imageSourcesFromResponse(data)
+        renderColorCompare(data.metrics)
         renderMetrics(data.metrics)
         renderStages(imageSources)
         setupManualEditor(data.metrics, imageSources['00_original'])

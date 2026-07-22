@@ -5,9 +5,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+import colorspacious
 import cv2
 import numpy as np
 
+from app.services.color import (
+    classify_iris_color,
+    extract_iris_lab_median,
+    linear_to_srgb,
+    srgb_to_linear,
+)
+from app.services.grade import get_grade_boundaries, map_l_star_to_grade
 from app.services.iris_detect import IrisDetectionResult
 from app.services.pipeline import AnalysisPipelineResult
 
@@ -212,6 +220,249 @@ def draw_sclera_samples(
     return out
 
 
+def _lab_to_srgb01(lab: Tuple[float, float, float]) -> np.ndarray:
+    srgb = colorspacious.cspace_convert(
+        [float(lab[0]), float(lab[1]), float(lab[2])], "CIELab", "sRGB1"
+    )
+    return np.clip(np.asarray(srgb, dtype=np.float64), 0.0, 1.0)
+
+
+def _lab_to_hex(lab: Tuple[float, float, float]) -> str:
+    srgb = _lab_to_srgb01(lab)
+    return "#{:02x}{:02x}{:02x}".format(
+        int(round(srgb[0] * 255)),
+        int(round(srgb[1] * 255)),
+        int(round(srgb[2] * 255)),
+    )
+
+
+def _lab_to_bgr_u8(lab: Tuple[float, float, float]) -> Tuple[int, int, int]:
+    srgb = _lab_to_srgb01(lab)
+    return (
+        int(round(srgb[2] * 255)),
+        int(round(srgb[1] * 255)),
+        int(round(srgb[0] * 255)),
+    )
+
+
+def _pack_side_metrics(
+    lab,
+    grade: int,
+    confidence: float,
+    iris_color,
+) -> dict:
+    lab_t = (float(lab.L), float(lab.a), float(lab.b))
+    return {
+        "lab": {"L": round(lab_t[0], 2), "a": round(lab_t[1], 2), "b": round(lab_t[2], 2)},
+        "hex": _lab_to_hex(lab_t),
+        "grade": int(grade),
+        "confidence": float(confidence),
+        "iris_color": {
+            "code": iris_color.code,
+            "label": iris_color.label,
+            "confidence": iris_color.confidence,
+            "hue": iris_color.hue,
+            "depth": iris_color.depth,
+        },
+    }
+
+
+def compute_color_correction_compare(
+    pipeline: AnalysisPipelineResult,
+    config: Optional[dict],
+    highlight_v: int,
+) -> dict:
+    """
+    同一份检测/采样下计算调色前（基线）与调色后数值，供调试台对比。
+
+    未启用或未成功应用巩膜校正时，两侧数值相同，applied=false。
+    """
+    cfg = config or {}
+    eye_cfg = cfg.get("eye_closeup", {})
+    mad_trim = float(eye_cfg.get("color_trim_mad", 2.5)) if pipeline.scope is not None else 0.0
+    sample_cap = int(eye_cfg.get("color_sample_cap", 20000))
+
+    after = _pack_side_metrics(
+        pipeline.lab,
+        pipeline.grade.grade,
+        pipeline.grade.confidence,
+        pipeline.iris_color,
+    )
+
+    applied = pipeline.sclera_status == "applied" and pipeline.sclera_gains is not None
+    if applied:
+        base_lab = extract_iris_lab_median(
+            pipeline.work_image,
+            pipeline.detection.mask,
+            highlight_v,
+            sample_cap=sample_cap,
+            masks=pipeline.sampling,
+            mad_trim=mad_trim,
+            channel_gains=None,
+        )
+        boundaries = get_grade_boundaries(cfg) if cfg else [55, 45, 29, 19]
+        base_grade = map_l_star_to_grade(base_lab.L, boundaries)
+        base_color = classify_iris_color(base_lab, cfg)
+        before = _pack_side_metrics(
+            base_lab, base_grade.grade, base_grade.confidence, base_color
+        )
+    else:
+        before = after
+
+    sclera = pipeline.sclera
+    return {
+        "applied": applied,
+        "status": pipeline.sclera_status,
+        "before": before,
+        "after": after,
+        "delta": {
+            "L": round(after["lab"]["L"] - before["lab"]["L"], 2),
+            "a": round(after["lab"]["a"] - before["lab"]["a"], 2),
+            "b": round(after["lab"]["b"] - before["lab"]["b"], 2),
+            "grade_changed": before["grade"] != after["grade"],
+            "color_changed": before["iris_color"]["code"] != after["iris_color"]["code"],
+        },
+        "gains": [round(float(g), 4) for g in pipeline.sclera_gains]
+        if pipeline.sclera_gains is not None
+        else None,
+        "sclera_lab": {
+            "L": round(sclera.lab[0], 2),
+            "a": round(sclera.lab[1], 2),
+            "b": round(sclera.lab[2], 2),
+        }
+        if sclera is not None and sclera.lab is not None
+        else None,
+    }
+
+
+def _apply_gains_bgr(
+    image_bgr: np.ndarray,
+    gains: np.ndarray,
+) -> np.ndarray:
+    """整图线性 RGB 对角增益（仅可视化；与取色路径一致，不含瞳孔黑偏置）。"""
+    rgb = image_bgr[:, :, ::-1].astype(np.float64) / 255.0
+    linear = srgb_to_linear(rgb)
+    linear = np.clip(linear * np.asarray(gains, dtype=np.float64).reshape(1, 1, 3), 0.0, 1.0)
+    srgb = linear_to_srgb(linear)
+    return (np.clip(srgb[:, :, ::-1], 0.0, 1.0) * 255.0).astype(np.uint8)
+
+
+def _iris_crop(image_bgr: np.ndarray, pipeline: AnalysisPipelineResult, pad_scale: float = 1.35):
+    h, w = image_bgr.shape[:2]
+    cx, cy = pipeline.detection.center
+    r = float(pipeline.detection.outer_radius or pipeline.detection.radius or min(h, w) * 0.25)
+    half = int(max(r * pad_scale, 40))
+    x1 = max(int(cx) - half, 0)
+    x2 = min(int(cx) + half, w)
+    y1 = max(int(cy) - half, 0)
+    y2 = min(int(cy) + half, h)
+    return image_bgr[y1:y2, x1:x2].copy()
+
+
+def _panel_with_swatch(
+    crop_bgr: np.ndarray,
+    side: dict,
+    title: str,
+    panel_w: int = 420,
+    panel_h: int = 520,
+) -> np.ndarray:
+    """单侧对比面板：虹膜裁切 + Lab 色块 + 数值。"""
+    panel = np.full((panel_h, panel_w, 3), 28, dtype=np.uint8)
+    cv2.putText(panel, title, (16, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+
+    crop_area_h, crop_area_w = 300, panel_w - 32
+    if crop_bgr.size > 0:
+        ch, cw = crop_bgr.shape[:2]
+        scale = min(crop_area_w / max(cw, 1), crop_area_h / max(ch, 1))
+        nw, nh = max(int(cw * scale), 1), max(int(ch * scale), 1)
+        resized = cv2.resize(crop_bgr, (nw, nh), interpolation=cv2.INTER_AREA)
+        ox = 16 + (crop_area_w - nw) // 2
+        oy = 48 + (crop_area_h - nh) // 2
+        panel[oy : oy + nh, ox : ox + nw] = resized
+
+    lab = side["lab"]
+    swatch = _lab_to_bgr_u8((lab["L"], lab["a"], lab["b"]))
+    y0 = 360
+    cv2.rectangle(panel, (16, y0), (panel_w - 16, y0 + 56), swatch, -1)
+    cv2.rectangle(panel, (16, y0), (panel_w - 16, y0 + 56), (200, 200, 200), 1)
+
+    lines = [
+        f"Lab=({lab['L']:.1f}, {lab['a']:.1f}, {lab['b']:.1f})",
+        f"Grade {side['grade']}  {side['iris_color']['code']}",
+        f"hex {side['hex']}",
+    ]
+    for i, line in enumerate(lines):
+        cv2.putText(
+            panel,
+            line,
+            (16, y0 + 84 + i * 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (230, 230, 230),
+            1,
+            cv2.LINE_AA,
+        )
+    return panel
+
+
+def draw_sclera_before_after(
+    pipeline: AnalysisPipelineResult,
+    compare: dict,
+) -> np.ndarray:
+    """
+    图 7：巩膜调色前 / 调色后对比
+    - 左：原图虹膜裁切 + 基线 Lab 色块
+    - 右：增益校正后裁切 + 校正 Lab 色块
+    """
+    before_img = pipeline.work_image
+    if compare.get("applied") and pipeline.sclera_gains is not None:
+        after_img = _apply_gains_bgr(pipeline.work_image, pipeline.sclera_gains)
+    else:
+        after_img = before_img
+
+    left = _panel_with_swatch(
+        _iris_crop(before_img, pipeline),
+        compare["before"],
+        "BEFORE (raw)",
+    )
+    right = _panel_with_swatch(
+        _iris_crop(after_img, pipeline),
+        compare["after"],
+        "AFTER (sclera norm)" if compare.get("applied") else "AFTER (= BEFORE)",
+    )
+    gap = np.full((left.shape[0], 12, 3), 18, dtype=np.uint8)
+    canvas = np.hstack([left, gap, right])
+
+    footer_h = 56
+    footer = np.full((footer_h, canvas.shape[1], 3), 18, dtype=np.uint8)
+    status = compare.get("status", "?")
+    color = (0, 220, 0) if compare.get("applied") else (0, 160, 255)
+    delta = compare.get("delta") or {}
+    line1 = f"status={status}  dL={delta.get('L', 0):+.2f}  da={delta.get('a', 0):+.2f}  db={delta.get('b', 0):+.2f}"
+    cv2.putText(footer, line1, (16, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1, cv2.LINE_AA)
+    gains = compare.get("gains")
+    sclera_lab = compare.get("sclera_lab")
+    parts = []
+    if gains is not None:
+        parts.append(f"gains=({gains[0]:.3f}, {gains[1]:.3f}, {gains[2]:.3f})")
+    if sclera_lab is not None:
+        parts.append(
+            f"sclera Lab=({sclera_lab['L']:.1f}, {sclera_lab['a']:.1f}, {sclera_lab['b']:.1f})"
+        )
+    if parts:
+        cv2.putText(
+            footer,
+            "  ".join(parts),
+            (16, 46),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (200, 200, 200),
+            1,
+            cv2.LINE_AA,
+        )
+    return np.vstack([canvas, footer])
+
+
 def _shrink_to_max_dim(image_bgr: np.ndarray, max_dim: int) -> np.ndarray:
     """最长边超过 max_dim 时等比缩小（仅用于展示/编码，坐标语义不变）。"""
     if max_dim <= 0:
@@ -228,6 +479,8 @@ def build_debug_images(
     pipeline: AnalysisPipelineResult,
     eye_closeup_cfg: dict,
     max_dim: int = 1200,
+    config: Optional[dict] = None,
+    highlight_v: Optional[int] = None,
 ) -> Dict[str, np.ndarray]:
     """生成全部调试叠加图。
 
@@ -249,10 +502,18 @@ def build_debug_images(
     }
     if pipeline.sclera is not None:
         images["06_sclera_samples"] = draw_sclera_samples(image_bgr, pipeline)
+
+    hv = int(highlight_v if highlight_v is not None else 240)
+    compare = compute_color_correction_compare(pipeline, config, hv)
+    images["07_sclera_before_after"] = draw_sclera_before_after(pipeline, compare)
     return {name: _shrink_to_max_dim(img, max_dim) for name, img in images.items()}
 
 
-def build_debug_metrics(pipeline: AnalysisPipelineResult, highlight_v: int) -> dict:
+def build_debug_metrics(
+    pipeline: AnalysisPipelineResult,
+    highlight_v: int,
+    config: Optional[dict] = None,
+) -> dict:
     """数值指标，便于对照图检查。坐标/半径均换算回原图坐标系。"""
     det = pipeline.detection
     smp = pipeline.sampling
@@ -271,6 +532,7 @@ def build_debug_metrics(pipeline: AnalysisPipelineResult, highlight_v: int) -> d
 
     pupil_center = _pt(det.pupil_center)
     scope = pipeline.scope
+    compare = compute_color_correction_compare(pipeline, config, highlight_v)
     return {
         "detection_method": det.method,
         "detection_mode": pipeline.detection_mode,
@@ -332,6 +594,7 @@ def build_debug_metrics(pipeline: AnalysisPipelineResult, highlight_v: int) -> d
             "pixel_count": pipeline.sclera.pixel_count if pipeline.sclera is not None else 0,
             "clipped_ratio": pipeline.sclera.clipped_ratio if pipeline.sclera is not None else 0.0,
         },
+        "color_correction": compare,
     }
 
 

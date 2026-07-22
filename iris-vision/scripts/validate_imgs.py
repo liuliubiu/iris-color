@@ -91,8 +91,13 @@ def main() -> None:
             continue
         elapsed = time.perf_counter() - t0
 
-        metrics = build_debug_metrics(pipeline, highlight_v)
-        overlays = build_debug_images(pipeline, config.get("eye_closeup", {}))
+        metrics = build_debug_metrics(pipeline, highlight_v, config=config)
+        overlays = build_debug_images(
+            pipeline,
+            config.get("eye_closeup", {}),
+            config=config,
+            highlight_v=highlight_v,
+        )
         for key in WANTED:
             _imwrite_unicode(OUT_DIR / f"{name}__{key}.jpg", overlays[key])
 

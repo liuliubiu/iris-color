@@ -196,10 +196,15 @@ def _build_debug_response(
     debug_cfg = config.get("debug", {})
     highlight_v = config.get("highlight_v_threshold", 240)
     eye_cfg = config.get("eye_closeup", {})
-    images = build_debug_images(pipeline, eye_cfg)
+    images = build_debug_images(
+        pipeline,
+        eye_cfg,
+        config=config,
+        highlight_v=highlight_v,
+    )
     # 00_original 保留原始分辨率：调试台人工校准画布依赖原图坐标系
     all_images = {"00_original": image_bgr, **images}
-    metrics = build_debug_metrics(pipeline, highlight_v)
+    metrics = build_debug_metrics(pipeline, highlight_v, config=config)
 
     run_id = None
     saved_dir = None
@@ -349,9 +354,14 @@ async def debug_viewer(
         ("03_highlight_rejection", "剔除干扰（红=环内被剔除的高光/过亮/极暗像素，外围变暗）"),
         ("04_valid_samples", "最终取色像素（绿色=参与 Lab 中位数）"),
         ("05_ring_mask_only", "环带 mask 伪彩色"),
+        ("06_sclera_samples", "巩膜参考采样（品红=采样像素，黄圆=环带）"),
+        ("07_sclera_before_after", "巩膜调色前 / 调色后对比（裁切 + Lab 色块）"),
     ]
     items = ""
     for key_name, title in panels:
+        img_path = run_dir / f"{key_name}.jpg"
+        if not img_path.exists():
+            continue
         src = f"/debug/files/{run_id}/{key_name}.jpg?key={key}"
         items += f"""
         <section>
