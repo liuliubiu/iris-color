@@ -27,7 +27,9 @@ DEFAULT_OUTPUT = ROOT / "debug_output"
 IMG_ROOT = ROOT.parent / "img"
 IMG_EXTS = (".jpg", ".jpeg", ".png")
 LABELS_PATH = ROOT / "labels" / "img_labels.json"
-# G2_L51.2_ 或旧版 G2_
+# 后缀：原名__G2_L51.2_M.jpg（保留原名排序）；兼容旧前缀 G2_L51.2_M_原名.jpg
+LABEL_SUFFIX_RE = re.compile(r"__G([1-5])_L([\d.]+)(_M)?$", re.IGNORECASE)
+LABEL_SUFFIX_GRADE_ONLY_RE = re.compile(r"__G([1-5])(_M)?$", re.IGNORECASE)
 LABEL_PREFIX_RE = re.compile(r"^G([1-5])_L([\d.]+)_", re.IGNORECASE)
 LEGACY_GRADE_PREFIX_RE = re.compile(r"^G[1-5]_", re.IGNORECASE)
 
@@ -60,7 +62,12 @@ def _list_img_files() -> list[str]:
     return sorted(items)
 
 
-def _strip_label_prefix(stem: str) -> str:
+def _strip_label_tags(stem: str) -> str:
+    """去掉文件名中的 Grade/L*/人工调整标记（后缀或旧前缀）。"""
+    for pattern in (LABEL_SUFFIX_RE, LABEL_SUFFIX_GRADE_ONLY_RE):
+        match = pattern.search(stem)
+        if match:
+            return stem[: match.start()]
     match = LABEL_PREFIX_RE.match(stem)
     if match:
         rest = stem[match.end() :]
@@ -85,8 +92,31 @@ def _format_l_star(l_star: float) -> str:
     return f"{l_star:.1f}"
 
 
-def _parse_label_prefix(filename: str) -> dict:
+def _format_label_tag(grade: int, l_star: Optional[float], *, manual_adjusted: bool) -> str:
+    manual_part = "_M" if manual_adjusted else ""
+    if l_star is not None:
+        return f"__G{grade}_L{_format_l_star(l_star)}{manual_part}"
+    if manual_adjusted:
+        return f"__G{grade}_M"
+    return f"__G{grade}"
+
+
+def _parse_label_tags(filename: str) -> dict:
     stem = Path(filename).stem
+    suffix = LABEL_SUFFIX_RE.search(stem)
+    if suffix:
+        return {
+            "grade_prefix": int(suffix.group(1)),
+            "l_star_prefix": float(suffix.group(2)),
+            "manual_adjusted": bool(suffix.group(3)),
+        }
+    suffix_grade = LABEL_SUFFIX_GRADE_ONLY_RE.search(stem)
+    if suffix_grade:
+        return {
+            "grade_prefix": int(suffix_grade.group(1)),
+            "l_star_prefix": None,
+            "manual_adjusted": bool(suffix_grade.group(2)),
+        }
     match = LABEL_PREFIX_RE.match(stem)
     if match:
         return {
@@ -104,7 +134,7 @@ def _parse_label_prefix(filename: str) -> dict:
     return {"grade_prefix": None, "l_star_prefix": None, "manual_adjusted": False}
 
 
-def _apply_label_prefix(
+def _apply_label_tags(
     filename: str,
     grade: int,
     l_star: Optional[float] = None,
@@ -112,13 +142,14 @@ def _apply_label_prefix(
     manual_adjusted: bool = False,
 ) -> str:
     path = Path(filename)
-    stem = _strip_label_prefix(path.stem)
-    manual_part = "_M" if manual_adjusted else ""
-    if l_star is not None:
-        return f"G{grade}_L{_format_l_star(l_star)}{manual_part}_{stem}{path.suffix}"
-    if manual_adjusted:
-        return f"G{grade}_M_{stem}{path.suffix}"
-    return f"G{grade}_{stem}{path.suffix}"
+    base = _strip_label_tags(path.stem)
+    tag = _format_label_tag(grade, l_star, manual_adjusted=manual_adjusted)
+    return f"{base}{tag}{path.suffix}"
+
+
+_strip_label_prefix = _strip_label_tags
+_parse_label_prefix = _parse_label_tags
+_apply_label_prefix = _apply_label_tags
 
 
 def _load_img_labels() -> dict:
@@ -444,7 +475,7 @@ def rename_with_grade_prefix(
     x_debug_key: Optional[str] = Header(None, alias="X-Debug-Key"),
     key: Optional[str] = Query(None),
 ):
-    """将 img/ 内图片重命名为 G{n}_L{L*}_ 前缀（可选 _M_ 人工调整标记），并写入 labels/img_labels.json。"""
+    """将 img/ 内图片重命名为 原名__G{n}_L{L*}_ 后缀，并写入 labels/img_labels.json。"""
     _verify_debug_key(x_debug_key or key, load_config(CONFIG_PATH))
     rel = payload.get("rel")
     grade = payload.get("grade")

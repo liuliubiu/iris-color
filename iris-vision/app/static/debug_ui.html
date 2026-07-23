@@ -288,6 +288,46 @@
     }
     .rename-status.ok { color: #3fb950; }
     .rename-status.err { color: #ffa198; }
+    .experiment-prefs {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #30363d;
+    }
+    .experiment-prefs h3 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      color: #58a6ff;
+      font-weight: 600;
+    }
+    .exp-fields {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .exp-fields label {
+      margin-bottom: 0;
+      font-size: 12px;
+    }
+    .exp-fields select,
+    .exp-fields input {
+      width: 100%;
+      margin-top: 4px;
+      margin-bottom: 0;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid #30363d;
+      background: #0d1117;
+      color: #e6edf3;
+      font-size: 12px;
+    }
+    .exp-fields .full { grid-column: 1 / -1; }
+    .exp-hint {
+      font-size: 11px;
+      color: #8b949e;
+      margin: 0 0 8px;
+      line-height: 1.4;
+    }
   </style>
 </head>
 <body>
@@ -336,14 +376,45 @@
         开始识别并生成调试图
       </button>
 
+      <div class="experiment-prefs" id="experimentPrefs" hidden>
+        <h3>实验记录 · 组别</h3>
+        <p class="exp-hint">日期按<strong>大组</strong>统一；照度、实验人、设备等按<strong>大组+小组</strong>与最近一条记录保持一致。</p>
+        <div class="exp-fields">
+          <label class="full">实验大组
+            <select id="expGroupName"></select>
+          </label>
+          <label class="full">实验小组
+            <select id="expSubgroupName"></select>
+          </label>
+          <label>实验人
+            <select id="expOperator"><option value="">—</option></select>
+          </label>
+          <label>拍照设备
+            <select id="expCamera"><option value="">—</option></select>
+          </label>
+          <label class="full">光源设备
+            <select id="expLight"><option value="">—</option></select>
+          </label>
+          <label>日期
+            <input id="expDate" type="date" />
+          </label>
+          <label>环境照度 (lux)
+            <input id="expIlluminance" type="number" step="1" min="0" placeholder="同组自动带入" />
+          </label>
+        </div>
+        <div class="btn-row">
+          <button type="button" id="btnRefreshExpMeta">刷新组别列表</button>
+        </div>
+      </div>
+
       <div class="label-actions" id="labelActions" hidden>
         <div class="rename-row">
-          <button type="button" id="btnRenameGrade" disabled>标记为 G{n}_L{L*}_</button>
+          <button type="button" id="btnRenameGrade" disabled>追加标记 __G{n}_L{L*}_</button>
           <button type="button" id="btnAddExperiment" hidden>加入实验记录</button>
         </div>
         <label class="checkbox" id="markManualRow">
           <input type="checkbox" id="markManual" />
-          人工调整区域（文件名加 _M_ 标记）
+          人工调整区域（文件名后缀加 _M）
         </label>
         <div class="rename-status" id="renameStatus"></div>
       </div>
@@ -433,6 +504,180 @@
       '05_ring_mask_only': '环带 mask 伪彩色',
     }
 
+    const EXP_PREFS_KEY = 'iris_debug_exp_prefs'
+    let expDistinct = { group_name: [], subgroup_name: [], operator: [], camera_device: [], light_device: [] }
+
+    function todayStr() {
+      const d = new Date()
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    }
+
+    function loadExpPrefs() {
+      try {
+        return JSON.parse(localStorage.getItem(EXP_PREFS_KEY) || '{}')
+      } catch (_) {
+        return {}
+      }
+    }
+
+    function saveExpPrefs() {
+      localStorage.setItem(EXP_PREFS_KEY, JSON.stringify(collectExperimentContext()))
+    }
+
+    function fillSelectOptions(select, values, selected) {
+      const uniq = [...new Set((values || []).filter(Boolean))]
+      select.innerHTML = uniq.map((v) =>
+        `<option value="${String(v).replace(/"/g, '&quot;')}">${v}</option>`
+      ).join('') || '<option value="">— 暂无 —</option>'
+      if (selected && uniq.includes(selected)) select.value = selected
+      else if (uniq.length) select.value = uniq[0]
+    }
+
+    function fillOptionalSelect(select, values, selected) {
+      const uniq = [...new Set((values || []).filter(Boolean))]
+      select.innerHTML = '<option value="">—</option>' + uniq.map((v) =>
+        `<option value="${String(v).replace(/"/g, '&quot;')}">${v}</option>`
+      ).join('')
+      if (selected) select.value = selected
+    }
+
+    async function expApiFetch(path, opts = {}) {
+      const apiKey = keyInput.value.trim()
+      const url = new URL(path, location.origin)
+      url.searchParams.set('key', apiKey)
+      if (opts.query) {
+        Object.entries(opts.query).forEach(([k, v]) => {
+          if (v != null && v !== '') url.searchParams.set(k, v)
+        })
+      }
+      const res = await fetch(url.toString(), {
+        method: opts.method || 'GET',
+        headers: opts.body ? { 'Content-Type': 'application/json' } : {},
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(typeof data.detail === 'string' ? data.detail : (data.detail || res.statusText))
+      }
+      return res.json()
+    }
+
+    async function loadSubgroupOptions(groupName, preferred) {
+      const subSelect = document.getElementById('expSubgroupName')
+      let subs = []
+      if (groupName) {
+        try {
+          const data = await expApiFetch('/experiments/records', { query: { group_name: groupName } })
+          subs = [...new Set((data.records || []).map((r) => r.subgroup_name).filter(Boolean))]
+        } catch (_) {}
+        try {
+          const suggest = await expApiFetch('/experiments/meta/suggest-names', {
+            query: { group_name: groupName, date: todayStr() },
+          })
+          if (suggest.subgroup_name && !subs.includes(suggest.subgroup_name)) {
+            subs.push(suggest.subgroup_name)
+          }
+        } catch (_) {}
+      }
+      if (!subs.length) subs = expDistinct.subgroup_name || []
+      fillSelectOptions(subSelect, subs, preferred || subs[0])
+    }
+
+    function applySubgroupDefaultsToForm(data) {
+      if (!data) return
+      if (data.operator) document.getElementById('expOperator').value = data.operator
+      if (data.camera_device) document.getElementById('expCamera').value = data.camera_device
+      if (data.light_device) document.getElementById('expLight').value = data.light_device
+      if (data.experiment_date) document.getElementById('expDate').value = data.experiment_date
+      else document.getElementById('expDate').value = todayStr()
+      const illumEl = document.getElementById('expIlluminance')
+      if (data.illuminance != null && data.illuminance !== '') {
+        illumEl.value = data.illuminance
+      } else {
+        illumEl.value = ''
+      }
+    }
+
+    async function applyExpSubgroupDefaults() {
+      const groupName = document.getElementById('expGroupName').value.trim()
+      const subgroupName = document.getElementById('expSubgroupName').value.trim()
+      if (!groupName) return
+      try {
+        const data = await expApiFetch('/experiments/meta/subgroup-defaults', {
+          query: { group_name: groupName, subgroup_name: subgroupName || '' },
+        })
+        applySubgroupDefaultsToForm(data)
+      } catch (_) {
+        document.getElementById('expDate').value = todayStr()
+      }
+      saveExpPrefs()
+    }
+
+    async function loadExperimentMeta() {
+      const panel = document.getElementById('experimentPrefs')
+      try {
+        const options = await expApiFetch('/experiments/meta/options')
+        expDistinct = options
+        const prefs = loadExpPrefs()
+        let groups = [...(options.group_name || [])]
+        try {
+          const suggest = await expApiFetch('/experiments/meta/suggest-names', { query: { date: todayStr() } })
+          if (suggest.group_name && !groups.includes(suggest.group_name)) groups.push(suggest.group_name)
+        } catch (_) {}
+        const groupSelect = document.getElementById('expGroupName')
+        fillSelectOptions(groupSelect, groups, prefs.group_name || groups[0])
+        fillOptionalSelect(document.getElementById('expOperator'), options.operator, prefs.operator)
+        fillOptionalSelect(document.getElementById('expCamera'), options.camera_device, prefs.camera_device)
+        fillOptionalSelect(document.getElementById('expLight'), options.light_device, prefs.light_device)
+        await loadSubgroupOptions(groupSelect.value, prefs.subgroup_name)
+        document.getElementById('expDate').value = prefs.experiment_date || todayStr()
+        if (prefs.illuminance != null && prefs.illuminance !== '') {
+          document.getElementById('expIlluminance').value = prefs.illuminance
+        }
+        if (prefs.operator) document.getElementById('expOperator').value = prefs.operator
+        if (prefs.camera_device) document.getElementById('expCamera').value = prefs.camera_device
+        if (prefs.light_device) document.getElementById('expLight').value = prefs.light_device
+        await applyExpSubgroupDefaults()
+        panel.hidden = false
+      } catch (err) {
+        if (String(err.message).includes('experiments_disabled')) {
+          panel.hidden = true
+        } else {
+          panel.hidden = false
+          panel.querySelector('.exp-hint').textContent = '加载组别失败：' + err.message
+        }
+      }
+    }
+
+    function collectExperimentContext() {
+      const illumRaw = document.getElementById('expIlluminance')?.value
+      const illuminance = illumRaw === '' || illumRaw == null ? null : Number(illumRaw)
+      return {
+        group_name: document.getElementById('expGroupName')?.value?.trim() || '',
+        subgroup_name: document.getElementById('expSubgroupName')?.value?.trim() || '',
+        experiment_date: document.getElementById('expDate')?.value || todayStr(),
+        operator: document.getElementById('expOperator')?.value?.trim() || '',
+        camera_device: document.getElementById('expCamera')?.value?.trim() || '',
+        light_device: document.getElementById('expLight')?.value?.trim() || '',
+        illuminance: Number.isFinite(illuminance) ? illuminance : null,
+      }
+    }
+
+    function stashExperimentContextForImport() {
+      sessionStorage.setItem('exp_import_context', JSON.stringify(collectExperimentContext()))
+    }
+
+    document.getElementById('btnRefreshExpMeta').onclick = () => loadExperimentMeta()
+    document.getElementById('expGroupName').addEventListener('change', async () => {
+      await loadSubgroupOptions(document.getElementById('expGroupName').value.trim())
+      await applyExpSubgroupDefaults()
+    })
+    document.getElementById('expSubgroupName').addEventListener('change', applyExpSubgroupDefaults)
+    ;['expOperator', 'expCamera', 'expLight', 'expDate', 'expIlluminance'].forEach((id) => {
+      document.getElementById(id).addEventListener('change', saveExpPrefs)
+      document.getElementById(id).addEventListener('input', saveExpPrefs)
+    })
+
     async function startCamera() {
       try {
         mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -488,8 +733,8 @@
       btn.disabled = !canRename
       const manualPart = markManual.checked ? '_M' : ''
       btn.textContent = canRename
-        ? `标记为 G${lastGrade}_L${Number(lStar).toFixed(1)}${manualPart}_`
-        : '标记为 G{n}_L{L*}_'
+        ? `追加标记 __G${lastGrade}_L${Number(lStar).toFixed(1)}${manualPart}`
+        : '追加标记 __G{n}_L{L*}_'
     }
 
     function setManualMarkFlag(isManual) {
@@ -1058,6 +1303,7 @@
     document.getElementById('btnAddExperiment').onclick = () => {
       if (!lastMetrics) return
       const apiKey = keyInput.value.trim()
+      stashExperimentContextForImport()
       if (lastRunId) {
         const url = `/experiments/ui?key=${encodeURIComponent(apiKey)}&import_run=${encodeURIComponent(lastRunId)}`
         window.open(url, '_blank')
@@ -1067,6 +1313,7 @@
         metrics: lastMetrics,
         source_rel: currentImgRel || null,
         source_filename: currentImgRel ? currentImgRel.split('/').pop() : null,
+        experiment_context: collectExperimentContext(),
       }))
       window.open(`/experiments/ui?key=${encodeURIComponent(apiKey)}&import_draft=1`, '_blank')
     }
@@ -1074,6 +1321,7 @@
     startCamera()
     loadHistory(keyInput.value)
     loadImgList()
+    loadExperimentMeta()
   </script>
 </body>
 </html>

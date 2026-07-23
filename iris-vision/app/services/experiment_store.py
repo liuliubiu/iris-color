@@ -211,18 +211,29 @@ class ExperimentStore(ABC):
     def suggest_subgroup_name(self, group_name: str) -> str: ...
 
     def get_subgroup_defaults(self, group_name: str, subgroup_name: str) -> dict[str, Any]:
-        """同一大组+小组最近一条记录的实验人/拍摄设备/照度，供导入时快速填写。"""
-        if not group_name or not subgroup_name:
+        """同一大组统一日期；同一大组+小组统一实验人/设备/照度（取各自最近一条）。"""
+        if not group_name:
             return {}
-        records = self.list_records(group_name=group_name, subgroup_name=subgroup_name)
-        if not records:
-            return {}
-        latest = max(records, key=lambda r: int(r.get("id") or 0))
-        return {
-            "operator": latest.get("operator") or "",
-            "camera_device": latest.get("camera_device") or "",
-            "illuminance": latest.get("illuminance"),
-        }
+        out: dict[str, Any] = {}
+
+        group_records = self.list_records(group_name=group_name)
+        if group_records:
+            latest_group = max(group_records, key=lambda r: int(r.get("id") or 0))
+            out["experiment_date"] = latest_group.get("experiment_date") or ""
+
+        if subgroup_name:
+            sub_records = self.list_records(group_name=group_name, subgroup_name=subgroup_name)
+            if sub_records:
+                latest_sub = max(sub_records, key=lambda r: int(r.get("id") or 0))
+                out.update(
+                    {
+                        "operator": latest_sub.get("operator") or "",
+                        "camera_device": latest_sub.get("camera_device") or "",
+                        "light_device": latest_sub.get("light_device") or "",
+                        "illuminance": latest_sub.get("illuminance"),
+                    }
+                )
+        return out
 
     @staticmethod
     def _validate_grade(value: Optional[str], field: str) -> None:

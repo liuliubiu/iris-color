@@ -739,7 +739,29 @@
         if (!data) return;
         if (data.operator) form.operator = data.operator;
         if (data.camera_device) form.camera_device = data.camera_device;
+        if (data.light_device) form.light_device = data.light_device;
+        if (data.experiment_date) form.experiment_date = data.experiment_date;
         if (data.illuminance != null) form.illuminance = data.illuminance;
+      }
+
+      function applyExperimentContext(ctx) {
+        if (!ctx || typeof ctx !== 'object') return;
+        skipSubgroupDefaults = true;
+        if (ctx.group_name) form.group_name = ctx.group_name;
+        if (ctx.subgroup_name) form.subgroup_name = ctx.subgroup_name;
+        if (ctx.experiment_date) form.experiment_date = ctx.experiment_date;
+        if (ctx.operator) form.operator = ctx.operator;
+        if (ctx.camera_device) form.camera_device = ctx.camera_device;
+        if (ctx.light_device) form.light_device = ctx.light_device;
+        if (ctx.illuminance != null) form.illuminance = ctx.illuminance;
+        skipSubgroupDefaults = false;
+      }
+
+      function takeImportContext() {
+        const raw = sessionStorage.getItem('exp_import_context');
+        sessionStorage.removeItem('exp_import_context');
+        if (!raw) return null;
+        try { return JSON.parse(raw); } catch (_) { return null; }
       }
 
       async function applySubgroupDefaults() {
@@ -855,16 +877,20 @@
         }
       }
 
-      async function openImportDrawer(payload) {
+      async function openImportDrawer(payload, experimentContext) {
         editingId.value = null;
+        const ctx = experimentContext || takeImportContext();
         if (!drawerVisible.value) {
           Object.assign(form, emptyForm());
-          await fillSuggestedNames(true);
+          if (ctx) applyExperimentContext(ctx);
+          else await fillSuggestedNames(true);
+        } else if (ctx) {
+          applyExperimentContext(ctx);
         }
         applyImportPayload(payload);
         importDialogVisible.value = false;
         drawerVisible.value = true;
-        ElMessage.success('已导入识别数据，请确认实验组等信息');
+        ElMessage.success(ctx ? '已导入识别数据与 Debug 组别' : '已导入识别数据，请确认实验组等信息');
       }
 
       async function importFromRun(runId) {
@@ -884,7 +910,7 @@
             try {
               const draft = JSON.parse(raw);
               const payload = await apiFetch('/experiments/import/from-metrics', { method: 'POST', body: draft });
-              await openImportDrawer(payload);
+              await openImportDrawer(payload, draft.experiment_context || null);
             } catch (e) {
               ElMessage.error('导入当前识别结果失败：' + e.message);
             }

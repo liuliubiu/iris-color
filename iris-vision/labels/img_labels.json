@@ -1,64 +1,4 @@
 {
-  "0716 上午/林/honor 70/G1_L59.1_裂隙灯_普通环境 (2).jpg": {
-    "confidence": 0.3,
-    "grade": 1,
-    "iris_color": {
-      "code": "light_brown",
-      "confidence": 0.9,
-      "depth": "light",
-      "hue": "brown",
-      "label": "浅棕色",
-      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
-    },
-    "lab": {
-      "L": 59.12,
-      "a": 19.64,
-      "b": 28.94
-    },
-    "manual_adjusted": false,
-    "previous_rel": "0716 上午/林/honor 70/裂隙灯_普通环境 (2).jpg",
-    "updated_at": "2026-07-16T07:01:03Z"
-  },
-  "0716 上午/林/honor 70/G1_L59.4_裂隙灯_暗 (1).jpg": {
-    "confidence": 0.3,
-    "grade": 1,
-    "iris_color": {
-      "code": "light_brown",
-      "confidence": 0.9,
-      "depth": "light",
-      "hue": "brown",
-      "label": "浅棕色",
-      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
-    },
-    "lab": {
-      "L": 59.36,
-      "a": 18.49,
-      "b": 27.94
-    },
-    "manual_adjusted": false,
-    "previous_rel": "0716 上午/林/honor 70/裂隙灯_暗 (1).jpg",
-    "updated_at": "2026-07-16T07:02:03Z"
-  },
-  "0716 上午/林/honor 70/G1_L59.8_裂隙灯_普通环境 (3).jpg": {
-    "confidence": 0.3,
-    "grade": 1,
-    "iris_color": {
-      "code": "light_brown",
-      "confidence": 0.9,
-      "depth": "light",
-      "hue": "brown",
-      "label": "浅棕色",
-      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
-    },
-    "lab": {
-      "L": 59.82,
-      "a": 19.17,
-      "b": 29.2
-    },
-    "manual_adjusted": false,
-    "previous_rel": "0716 上午/林/honor 70/裂隙灯_普通环境 (3).jpg",
-    "updated_at": "2026-07-16T07:01:40Z"
-  },
   "0716 上午/林/honor 70/G1_L60.2_裂隙灯_普通环境 (1).jpg": {
     "confidence": 0.3,
     "grade": 1,
@@ -77,26 +17,6 @@
     },
     "previous_rel": "0716 上午/林/honor 70/裂隙灯_普通环境 (1).jpg",
     "updated_at": "2026-07-16T07:00:36Z"
-  },
-  "0716 上午/林/honor 70/G1_L61.3_裂隙灯_暗 (2).jpg": {
-    "confidence": 0.35,
-    "grade": 1,
-    "iris_color": {
-      "code": "light_brown",
-      "confidence": 0.9,
-      "depth": "light",
-      "hue": "brown",
-      "label": "浅棕色",
-      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
-    },
-    "lab": {
-      "L": 61.27,
-      "a": 16.77,
-      "b": 24.91
-    },
-    "manual_adjusted": false,
-    "previous_rel": "0716 上午/林/honor 70/裂隙灯_暗 (2).jpg",
-    "updated_at": "2026-07-16T07:02:20Z"
   },
   "0716 上午/林/honor 70/G2_L48.9_补充光_暗 (3).jpg": {
     "confidence": 0.3,
@@ -249,6 +169,86 @@
     },
     "previous_rel": "0716 上午/林/honor 70/补充光_普通环境 (3).jpg",
     "updated_at": "2026-07-16T06:57:51Z"
+  },
+  "0716 上午/林/honor 70/裂隙灯_普通环境 (2)__G1_L57.5.jpg": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.9,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 57.49,
+      "a": 13.97,
+      "b": 19.28
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/honor 70/G1_L59.1_裂隙灯_普通环境 (2).jpg",
+    "updated_at": "2026-07-23T06:18:48Z"
+  },
+  "0716 上午/林/honor 70/裂隙灯_普通环境 (3)__G1_L57.4.jpg": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.9,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 57.44,
+      "a": 15.59,
+      "b": 21.88
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/honor 70/G1_L59.8_裂隙灯_普通环境 (3).jpg",
+    "updated_at": "2026-07-23T08:33:07Z"
+  },
+  "0716 上午/林/honor 70/裂隙灯_暗 (1)__G1_L56.4.jpg": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.88,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 56.42,
+      "a": 15.64,
+      "b": 17.74
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/honor 70/G1_L59.4_裂隙灯_暗 (1).jpg",
+    "updated_at": "2026-07-23T08:36:26Z"
+  },
+  "0716 上午/林/honor 70/裂隙灯_暗 (2)__G1_L58.4.jpg": {
+    "confidence": 0.3,
+    "grade": 1,
+    "iris_color": {
+      "code": "light_brown",
+      "confidence": 0.9,
+      "depth": "light",
+      "hue": "brown",
+      "label": "浅棕色",
+      "reason": "未满足蓝/绿条件，按棕色系归类；L*>45（浅棕）"
+    },
+    "lab": {
+      "L": 58.37,
+      "a": 15.2,
+      "b": 16.54
+    },
+    "manual_adjusted": false,
+    "previous_rel": "0716 上午/林/honor 70/G1_L61.3_裂隙灯_暗 (2).jpg",
+    "updated_at": "2026-07-23T08:38:03Z"
   },
   "0716 上午/林/iphone 15 plus/G1_L55.5_M_裂隙灯_暗 (8).png": {
     "confidence": 0.3,
