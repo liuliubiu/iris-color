@@ -9,11 +9,13 @@ iris-vision 入口文件。
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pathlib import Path
 
 from app.api.debug_files import router as debug_files_router
 from app.api.debug_routes import router as debug_router
 from app.api.label_routes import router as label_router
 from app.api.routes import router
+from app.services.pipeline import load_config
 
 app = FastAPI(
     title="iris-vision",
@@ -33,3 +35,18 @@ app.include_router(router)
 app.include_router(debug_router)
 app.include_router(debug_files_router)
 app.include_router(label_router)
+
+_config_path = Path(__file__).parent / "config" / "grade_thresholds.yaml"
+if load_config(_config_path).get("experiments", {}).get("enabled", False):
+    from fastapi.staticfiles import StaticFiles
+
+    from app.api.experiment_routes import router as experiment_router
+
+    _vendor_dir = Path(__file__).parent / "app" / "static" / "vendor"
+    if _vendor_dir.is_dir():
+        app.mount(
+            "/experiments/vendor",
+            StaticFiles(directory=_vendor_dir),
+            name="experiment_vendor",
+        )
+    app.include_router(experiment_router)

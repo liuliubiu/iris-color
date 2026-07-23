@@ -144,3 +144,17 @@ debug:
   api_key: iris-color-dev
   save_to_disk: false
   output_dir: debug_output
+
+# 实验记录（本地开发用，云端保持 enabled: false）
+experiments:
+  enabled: true
+  api_key: iris-color-dev
+  backend: mysql
+  db_path: data/experiment_records.db
+  mysql:
+    host: 127.0.0.1
+    port: 3306
+    user: root
+    password: "zxcvbnm"              # 填写本地 MySQL 密码，或设置环境变量 EXPERIMENT_MYSQL_PASSWORD
+    database: iris_experiment
+    charset: utf8mb4

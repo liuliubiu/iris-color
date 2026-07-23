@@ -339,6 +339,7 @@
       <div class="label-actions" id="labelActions" hidden>
         <div class="rename-row">
           <button type="button" id="btnRenameGrade" disabled>标记为 G{n}_L{L*}_</button>
+          <button type="button" id="btnAddExperiment" hidden>加入实验记录</button>
         </div>
         <label class="checkbox" id="markManualRow">
           <input type="checkbox" id="markManual" />
@@ -411,6 +412,7 @@
     let currentBlob = null
     let currentImgRel = null
     let lastGrade = null
+    let lastRunId = null
     let lastMetrics = null
     let lastManualAdjusted = false
     let imgFileList = []
@@ -468,13 +470,21 @@
       }
     }
 
+    function updateExperimentButton() {
+      const btn = document.getElementById('btnAddExperiment')
+      btn.hidden = !lastMetrics
+      btn.title = lastRunId
+        ? '打开实验记录页并导入本次 Debug 运行'
+        : (lastMetrics ? '将当前识别结果导入实验记录（无需保存到磁盘）' : '')
+    }
+
     function updateRenameButton() {
       const btn = document.getElementById('btnRenameGrade')
       const markManual = document.getElementById('markManual')
       const labelActions = document.getElementById('labelActions')
       const lStar = lastMetrics?.lab?.L
       const canRename = Boolean(currentImgRel && lastGrade >= 1 && lastGrade <= 5 && lStar != null)
-      labelActions.hidden = !canRename
+      labelActions.hidden = !canRename && !lastMetrics
       btn.disabled = !canRename
       const manualPart = markManual.checked ? '_M' : ''
       btn.textContent = canRename
@@ -894,6 +904,7 @@
 
       const form = new FormData()
       form.append('file', currentBlob, 'capture.jpg')
+      if (currentImgRel) form.append('source_rel', currentImgRel)
 
       try {
         const url = `/debug/analyze?skip_quality=${skipQ}&key=${encodeURIComponent(apiKey)}`
@@ -912,13 +923,17 @@
         document.getElementById('resultContent').hidden = false
         lastGrade = data.metrics.grade
         lastMetrics = data.metrics
+        lastRunId = data.run_id || null
+        updateExperimentButton()
         setManualMarkFlag(false)
         document.getElementById('gradeDisplay').textContent =
           formatGradeDisplay(data.metrics.grade, data.metrics.lab?.L, false)
         document.getElementById('runMeta').textContent =
           data.run_id
             ? `run_id: ${data.run_id} | 保存目录: ${data.saved_dir || '-'}`
-            : '未保存到本地；阶段图由本次响应直接展示'
+            : (currentImgRel
+              ? `未写入磁盘（save_to_disk=false）；可关联 img/${currentImgRel} 并导入实验记录`
+              : '未写入磁盘（save_to_disk=false）；识别结果可导入实验记录，本地上传图无 img 关联')
         updateRenameButton()
         const imageSources = imageSourcesFromResponse(data)
         renderColorCompare(data.metrics)
@@ -946,6 +961,7 @@
       const form = new FormData()
       form.append('file', currentBlob, 'manual-adjustment.jpg')
       form.append('manual_params', JSON.stringify(manualState))
+      if (currentImgRel) form.append('source_rel', currentImgRel)
 
       try {
         const url = `/debug/analyze/manual?skip_quality=${skipQ}&key=${encodeURIComponent(apiKey)}`
@@ -963,13 +979,17 @@
         document.getElementById('resultContent').hidden = false
         lastGrade = data.metrics.grade
         lastMetrics = data.metrics
+        lastRunId = data.run_id || null
+        updateExperimentButton()
         setManualMarkFlag(true)
         document.getElementById('gradeDisplay').textContent =
           formatGradeDisplay(data.metrics.grade, data.metrics.lab?.L, true)
         document.getElementById('runMeta').textContent =
           data.run_id
             ? `run_id: ${data.run_id} | 保存目录: ${data.saved_dir || '-'} | 人工调整`
-            : '未保存到本地；阶段图由本次响应直接展示 | 人工调整'
+            : (currentImgRel
+              ? `未写入磁盘；可关联 img/${currentImgRel} 并导入实验记录 | 人工调整`
+              : '未写入磁盘；识别结果可导入实验记录 | 人工调整')
         updateRenameButton()
         const imageSources = imageSourcesFromResponse(data)
         renderColorCompare(data.metrics)
@@ -1034,6 +1054,22 @@
     }
 
     document.getElementById('markManual').addEventListener('change', updateRenameButton)
+
+    document.getElementById('btnAddExperiment').onclick = () => {
+      if (!lastMetrics) return
+      const apiKey = keyInput.value.trim()
+      if (lastRunId) {
+        const url = `/experiments/ui?key=${encodeURIComponent(apiKey)}&import_run=${encodeURIComponent(lastRunId)}`
+        window.open(url, '_blank')
+        return
+      }
+      sessionStorage.setItem('exp_import_draft', JSON.stringify({
+        metrics: lastMetrics,
+        source_rel: currentImgRel || null,
+        source_filename: currentImgRel ? currentImgRel.split('/').pop() : null,
+      }))
+      window.open(`/experiments/ui?key=${encodeURIComponent(apiKey)}&import_draft=1`, '_blank')
+    }
 
     startCamera()
     loadHistory(keyInput.value)

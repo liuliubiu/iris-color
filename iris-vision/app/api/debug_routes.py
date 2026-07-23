@@ -192,6 +192,8 @@ def _build_debug_response(
     pipeline,
     *,
     include_base64: bool,
+    source_rel: Optional[str] = None,
+    source_filename: Optional[str] = None,
 ) -> DebugAnalysisResponse:
     debug_cfg = config.get("debug", {})
     highlight_v = config.get("highlight_v_threshold", 240)
@@ -205,6 +207,12 @@ def _build_debug_response(
     # 00_original 保留原始分辨率：调试台人工校准画布依赖原图坐标系
     all_images = {"00_original": image_bgr, **images}
     metrics = build_debug_metrics(pipeline, highlight_v, config=config)
+    if source_rel:
+        metrics["source_rel"] = source_rel
+        metrics["image_rel"] = source_rel
+    if source_filename:
+        metrics["source_filename"] = source_filename
+        metrics["original_filename"] = source_filename
 
     run_id = None
     saved_dir = None
@@ -251,6 +259,7 @@ async def analyze_debug(
     skip_quality: bool = Query(False, description="跳过模糊/过曝质量门槛，便于测试糊图"),
     include_base64: bool = Query(False, description="是否在 JSON 内返回 base64 图片（体积大）"),
     mode: str = Query("auto", description="眼部特写识别模式：auto/precise/rough"),
+    source_rel: Optional[str] = Form(None, description="img/ 内相对路径，供实验记录关联"),
 ):
     """
     调试专用分析接口。
@@ -287,7 +296,10 @@ async def analyze_debug(
             }
         raise HTTPException(status_code=422, detail=detail) from exc
 
-    return _build_debug_response(image_bgr, config, pipeline, include_base64=include_base64)
+    return _build_debug_response(
+        image_bgr, config, pipeline, include_base64=include_base64,
+        source_rel=source_rel, source_filename=file.filename,
+    )
 
 
 @router.post("/analyze/manual", response_model=DebugAnalysisResponse)
@@ -298,6 +310,7 @@ async def analyze_debug_manual(
     key: Optional[str] = Query(None, description="与 X-Debug-Key 二选一，便于调试页表单提交"),
     skip_quality: bool = Query(False, description="跳过模糊/过曝质量门槛，便于测试糊图"),
     include_base64: bool = Query(False, description="是否在 JSON 内返回 base64 图片（体积大）"),
+    source_rel: Optional[str] = Form(None, description="img/ 内相对路径，供实验记录关联"),
 ):
     """调试专用：按人工调整的瞳孔/环带参数重新分析并保存新 run。"""
     config = load_config(CONFIG_PATH)
@@ -329,7 +342,10 @@ async def analyze_debug_manual(
             }
         raise HTTPException(status_code=422, detail=detail) from exc
 
-    return _build_debug_response(image_bgr, config, pipeline, include_base64=include_base64)
+    return _build_debug_response(
+        image_bgr, config, pipeline, include_base64=include_base64,
+        source_rel=source_rel, source_filename=file.filename,
+    )
 
 
 @router.get("/viewer/{run_id}", response_class=HTMLResponse)
