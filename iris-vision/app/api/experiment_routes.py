@@ -4,13 +4,16 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from app.services.experiment_debug_import import (
     enrich_import_payload_urls,
+    experiment_snapshot_urls,
+    generate_compare_snapshots_from_image_rel,
     list_debug_runs_summary,
     load_debug_run_metrics,
     metrics_to_import_payload,
+    snapshot_compare_images,
 )
 from app.services.experiment_store import ExperimentStore, create_experiment_store
 from app.services.pipeline import load_config
@@ -19,6 +22,7 @@ router = APIRouter(prefix="/experiments", tags=["experiments"])
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = ROOT / "config" / "grade_thresholds.yaml"
+IMG_ROOT = ROOT.parent / "img"
 
 _store: Optional[ExperimentStore] = None
 _store_key: Optional[str] = None
@@ -75,6 +79,94 @@ def _debug_api_key(config: dict) -> str:
     return config.get("debug", {}).get("api_key", "iris-color-dev")
 
 
+def _experiment_snapshot_root(config: dict) -> Path:
+    exp_cfg = config.get("experiments", {})
+    rel = exp_cfg.get("snapshot_dir", "data/experiment_snapshots")
+    return ROOT / rel
+
+
+def _apply_compare_snapshot_paths(
+    store: ExperimentStore,
+    record: dict,
+    paths: dict[str, Optional[str]],
+) -> dict:
+    if not paths.get("image_before_rel"):
+        return record
+    updated = store.update_record_images(
+        int(record["id"]),
+        image_before_rel=paths["image_before_rel"],
+        image_after_rel=paths["image_after_rel"],
+    )
+    return updated or record
+
+
+def _persist_compare_snapshots(config: dict, store: ExperimentStore, record: dict) -> dict:
+    """保存实验记录后，持久化调色前后对比图（debug run 或原图重识别）。"""
+    if record.get("image_before_rel") and record.get("image_after_rel"):
+        return record
+
+    record_id = int(record["id"])
+    snapshot_root = _experiment_snapshot_root(config)
+
+    run_id = record.get("debug_run_id")
+    if run_id:
+        paths = snapshot_compare_images(
+            _debug_output_root(config),
+            snapshot_root,
+            record_id,
+            run_id,
+        )
+        if paths.get("image_before_rel"):
+            return _apply_compare_snapshot_paths(store, record, paths)
+
+    image_rel = record.get("image_rel")
+    if image_rel:
+        try:
+            paths = generate_compare_snapshots_from_image_rel(
+                IMG_ROOT,
+                snapshot_root,
+                record_id,
+                image_rel,
+                config,
+                CONFIG_PATH,
+            )
+        except ValueError:
+            return record
+        if paths.get("image_before_rel"):
+            return _apply_compare_snapshot_paths(store, record, paths)
+
+    return record
+
+
+def ensure_record_compare_images(
+    config: dict,
+    store: ExperimentStore,
+    record_id: int,
+) -> dict:
+    """确保记录已有调色前后快照；若无则按 debug run 或 image_rel 生成。"""
+    record = store.get_by_id(record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="record_not_found")
+
+    if record.get("image_before_rel") and record.get("image_after_rel"):
+        out = dict(record)
+    else:
+        out = _persist_compare_snapshots(config, store, record)
+
+    if not out.get("image_before_rel"):
+        raise HTTPException(status_code=404, detail="compare_images_unavailable")
+
+    urls = experiment_snapshot_urls(
+        record_id,
+        config.get("experiments", {}).get("api_key", "iris-color-dev"),
+    )
+    return {
+        **out,
+        "thumb_before_url": urls["thumb_before_url"],
+        "thumb_after_url": urls["thumb_after_url"],
+    }
+
+
 @router.get("/ui", response_class=HTMLResponse)
 def experiment_ui(key: str = Query(...)):
     _verify_key(key)
@@ -125,12 +217,25 @@ def get_record(record_id: int, key: str = Query(...)):
     return record
 
 
+@router.post("/records/{record_id}/ensure-compare-images")
+def ensure_compare_images(record_id: int, key: str = Query(...)):
+    """按需生成或返回实验记录的调色前后对比图。"""
+    config = _verify_key(key)
+    store = _get_store(config)
+    try:
+        return ensure_record_compare_images(config, store, record_id)
+    except ValueError as exc:
+        raise _handle_value_error(exc) from exc
+
+
 @router.post("/records", status_code=201)
 def create_record(key: str = Query(...), payload: dict = Body(...)):
     config = _verify_key(key)
     store = _get_store(config)
     try:
-        return store.create_record(payload)
+        record = store.create_record(payload)
+        record = _persist_compare_snapshots(config, store, record)
+        return record
     except ValueError as exc:
         raise _handle_value_error(exc) from exc
 
@@ -145,6 +250,7 @@ def update_record(record_id: int, key: str = Query(...), payload: dict = Body(..
         raise _handle_value_error(exc) from exc
     if not record:
         raise HTTPException(status_code=404, detail="record_not_found")
+    record = _persist_compare_snapshots(config, store, record)
     return record
 
 
@@ -269,3 +375,19 @@ def get_debug_import_payload(run_id: str, key: str = Query(...)):
     dbg_key = _debug_api_key(config)
     payload = metrics_to_import_payload(metrics, run_id)
     return enrich_import_payload_urls(payload, dbg_key)
+
+
+@router.get("/snapshots/{record_id}/{filename}")
+def get_experiment_snapshot(
+    record_id: int,
+    filename: str,
+    key: str = Query(...),
+):
+    """读取实验记录持久化的调色前/后快照。"""
+    config = _verify_key(key)
+    if filename not in ("before.jpg", "after.jpg"):
+        raise HTTPException(status_code=400, detail="invalid_snapshot_file")
+    path = _experiment_snapshot_root(config) / str(record_id) / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="snapshot_not_found")
+    return FileResponse(path, media_type="image/jpeg")

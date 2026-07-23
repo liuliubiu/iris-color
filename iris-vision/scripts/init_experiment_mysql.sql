@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS experiment_records (
     notes TEXT NULL,
     image_rel VARCHAR(512) NULL COMMENT 'img/ 相对路径',
     debug_run_id VARCHAR(32) NULL COMMENT 'debug_output run_id',
+    image_before_rel VARCHAR(512) NULL COMMENT '持久化调色前快照路径',
+    image_after_rel VARCHAR(512) NULL COMMENT '持久化调色后快照路径',
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
     INDEX idx_exp_group (group_name),

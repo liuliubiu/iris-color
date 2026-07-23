@@ -79,9 +79,36 @@
   .debug-run-card .meta { padding: 8px 10px; font-size: 12px; line-height: 1.5; }
   .debug-run-card .run-id { font-weight: 600; color: #303133; }
   .debug-run-card .summary { color: #6b7280; margin-top: 4px; word-break: break-all; }
-  .import-preview { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 12px; padding: 10px; background: #f8fafc; border-radius: 8px; border: 1px solid #e5e7eb; }
-  .import-preview img { width: 96px; height: 96px; object-fit: cover; border-radius: 6px; background: #000; }
-  .import-preview .info { flex: 1; font-size: 12px; color: #475569; line-height: 1.6; }
+  .import-preview { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; padding: 10px; background: #f8fafc; border-radius: 8px; border: 1px solid #e5e7eb; }
+  .import-preview .info { font-size: 12px; color: #475569; line-height: 1.6; }
+  .compare-preview { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .compare-preview.single { grid-template-columns: 1fr; }
+  .compare-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+  .compare-card .label { font-size: 12px; font-weight: 600; color: #475569; padding: 6px 8px; background: #f1f5f9; border-bottom: 1px solid #e5e7eb; text-align: center; }
+  .compare-card img { width: 100%; height: 120px; object-fit: contain; background: #0f172a; display: block; cursor: zoom-in; }
+  .compare-card .meta { font-size: 11px; color: #64748b; padding: 4px 8px 8px; text-align: center; }
+  .compare-dialog-body { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .compare-dialog-body .panel { text-align: center; }
+  .compare-dialog-body .panel .cap { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #334155; }
+  .compare-dialog-body img { max-width: 100%; max-height: 52vh; object-fit: contain; background: #0f172a; border-radius: 8px; border: 1px solid #e5e7eb; }
+  .compare-dialog-body .wide img { max-height: 60vh; }
+  @media (max-width: 640px) {
+    .compare-preview, .compare-dialog-body { grid-template-columns: 1fr; }
+  }
+
+  .stats-toolbar {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 12px;
+    padding: 10px 12px; background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 6px;
+  }
+  .stats-toolbar .hint { font-size: 12px; color: #6b7280; flex: 1; min-width: 200px; }
+  .stats-table-wrap { max-height: 62vh; overflow: auto; }
+  .stats-table-wrap .el-table .cell { padding: 0 4px; }
+  .stats-num { font-family: Consolas, "Courier New", monospace; font-size: 12px; text-align: center; }
+  .stats-num.zero { color: #cbd5e1; }
+  .stats-summary {
+    margin-top: 10px; padding: 8px 12px; background: #eff6ff; border: 1px solid #bfdbfe;
+    border-radius: 6px; font-size: 12px; color: #1e40af; line-height: 1.6;
+  }
 </style>
 </head>
 <body>
@@ -96,6 +123,7 @@
     <div class="view-header">
       <span class="title">实验记录</span>
       <el-button type="success" size="small" plain @click="openImportDialog">从 Debug 导入</el-button>
+      <el-button type="primary" size="small" plain @click="openGradeStats">等级统计</el-button>
       <el-button type="primary" size="small" @click="openCreate">新建记录</el-button>
       <el-button type="danger" size="small" plain :disabled="!selectedIds.length" @click="bulkDelete">
         批量删除<span v-if="selectedIds.length"> ({{ selectedIds.length }})</span>
@@ -250,12 +278,21 @@
               <template v-slot="scope">{{ scope.row.notes || '—' }}</template>
             </el-table-column>
 
-            <el-table-column label="Debug/图片" min-width="120" align="center">
+            <el-table-column label="调色对比" width="88" align="center" fixed="right">
+              <template v-slot="scope">
+                <el-button v-if="canCompare(scope.row)" type="primary" link size="small"
+                  :loading="compareLoadingId === scope.row.id"
+                  @click.stop="openCompareDialog(scope.row)">对比</el-button>
+                <span v-else style="color:#cbd5e1">—</span>
+              </template>
+            </el-table-column>
+
+            <el-table-column label="Debug/原图" min-width="120" align="center">
               <template v-slot="scope">
                 <el-button v-if="scope.row.debug_run_id" link type="primary" size="small"
                   @click.stop="openDebugViewer(scope.row.debug_run_id)">Debug</el-button>
                 <el-button v-if="scope.row.image_rel" link type="primary" size="small"
-                  @click.stop="openImagePreview(scope.row.image_rel)">图片</el-button>
+                  @click.stop="openImagePreview(scope.row.image_rel)">原图</el-button>
                 <span v-if="!scope.row.debug_run_id && !scope.row.image_rel">—</span>
               </template>
             </el-table-column>
@@ -289,13 +326,38 @@
 
     <!-- 编辑抽屉 -->
     <el-drawer v-model="drawerVisible" :title="drawerTitle" size="520px" :close-on-click-modal="false">
-      <div v-if="importPreview.thumb_url" class="import-preview">
-        <img :src="importPreview.thumb_url" alt="preview" />
+      <div v-if="canCompare(formRowForCompare)" style="margin-bottom:12px">
+        <el-button type="primary" plain :loading="compareLoading" @click="openCompareFromForm">
+          查看调色前后对比
+        </el-button>
+      </div>
+      <div v-if="importPreview.thumb_url || importPreview.before_url || importPreview.after_url || importPreview.compare_url" class="import-preview">
+        <div v-if="importPreview.before_url || importPreview.after_url" class="compare-preview">
+          <div v-if="importPreview.before_url" class="compare-card">
+            <div class="label">调色前</div>
+            <img :src="importPreview.before_url" alt="before" @click="openCompareDialogFromPreview()" @error="onPreviewCompareError" />
+            <div class="meta">{{ form.grade_before || '—' }} · L* {{ fmtLstar(form.lstar_before) }}</div>
+          </div>
+          <div v-if="importPreview.after_url" class="compare-card">
+            <div class="label">调色后</div>
+            <img :src="importPreview.after_url" alt="after" @click="openCompareDialogFromPreview()" @error="onPreviewCompareError" />
+            <div class="meta">{{ form.grade_after || '—' }} · L* {{ fmtLstar(form.lstar_after) }}</div>
+          </div>
+        </div>
+        <div v-else-if="importPreview.compare_url" class="compare-preview single">
+          <div class="compare-card">
+            <div class="label">调色前 / 调色后</div>
+            <img :src="importPreview.compare_url" alt="compare" @click="openCompareDialogFromPreview()" />
+          </div>
+        </div>
         <div class="info">
           <div v-if="form.debug_run_id"><strong>Debug:</strong> {{ form.debug_run_id }}
             <el-button link type="primary" size="small" @click="openDebugViewer(form.debug_run_id)">查看</el-button>
           </div>
-          <div v-if="form.image_rel"><strong>图片:</strong> {{ form.image_rel }}</div>
+          <div v-if="form.image_rel"><strong>原图:</strong> {{ form.image_rel }}
+            <el-button v-if="importPreview.thumb_url" link type="primary" size="small"
+              @click="openImagePreview(form.image_rel)">打开</el-button>
+          </div>
           <div v-if="importPreview.summary">{{ importPreview.summary }}</div>
         </div>
       </div>
@@ -387,6 +449,83 @@
         </div>
       </div>
     </el-dialog>
+
+    <!-- 调色前后对比 -->
+    <el-dialog v-model="compareDialogVisible" title="调色前 / 调色后对比" width="860px" top="5vh" destroy-on-close>
+      <div v-if="compareDialog.before_url && compareDialog.after_url" class="compare-dialog-body">
+        <div class="panel">
+          <div class="cap">调色前 · {{ compareDialog.grade_before || '—' }} · L* {{ fmtLstar(compareDialog.lstar_before) }}</div>
+          <img :src="compareDialog.before_url" alt="before" @error="onDialogCompareError" />
+        </div>
+        <div class="panel">
+          <div class="cap">调色后 · {{ compareDialog.grade_after || '—' }} · L* {{ fmtLstar(compareDialog.lstar_after) }}</div>
+          <img :src="compareDialog.after_url" alt="after" @error="onDialogCompareError" />
+        </div>
+      </div>
+      <div v-else-if="compareDialog.compare_url" class="compare-dialog-body wide">
+        <div class="panel">
+          <div class="cap">调色前 / 调色后（Debug 对比图）</div>
+          <img :src="compareDialog.compare_url" alt="compare" />
+        </div>
+      </div>
+      <div v-if="compareDialog.image_rel" style="margin-top:12px;font-size:12px;color:#64748b;text-align:center">
+        原图：{{ compareDialog.image_rel }}
+        <el-button link type="primary" size="small" @click="openImagePreview(compareDialog.image_rel)">打开原图</el-button>
+      </div>
+    </el-dialog>
+
+    <!-- 等级统计 -->
+    <el-dialog v-model="statsDialogVisible" title="调色前 / 调色后等级统计" width="960px" top="4vh" destroy-on-close>
+      <div class="stats-toolbar">
+        <span style="font-size:13px;color:#475569">分组维度：</span>
+        <el-checkbox-group v-model="statsGroupBy" @change="refreshGradeStats">
+          <el-checkbox v-for="dim in statDimOptions" :key="dim.field" :label="dim.field">{{ dim.label }}</el-checkbox>
+        </el-checkbox-group>
+        <span class="hint">基于当前表格筛选结果，共 {{ filteredRecords.length }} 条记录</span>
+      </div>
+      <div class="stats-table-wrap">
+        <el-table :data="statsRows" border stripe size="small" empty-text="无数据或未选择分组维度" max-height="520">
+          <el-table-column
+            v-for="dim in activeStatDims"
+            :key="dim.field"
+            :prop="dim.field"
+            :label="dim.label"
+            min-width="108"
+            show-overflow-tooltip
+          >
+            <template v-slot="scope">{{ formatStatDim(scope.row[dim.field]) }}</template>
+          </el-table-column>
+          <el-table-column label="调色前" align="center">
+            <el-table-column v-for="g in gradeOptions" :key="'b-' + g" :label="gradeShort(g)" width="54" align="center">
+              <template v-slot="scope">
+                <span class="stats-num" :class="{ zero: !scope.row.before[g] }">{{ scope.row.before[g] || 0 }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="计" width="54" align="center">
+              <template v-slot="scope"><span class="stats-num">{{ gradeCountSum(scope.row.before) }}</span></template>
+            </el-table-column>
+          </el-table-column>
+          <el-table-column label="调色后" align="center">
+            <el-table-column v-for="g in gradeOptions" :key="'a-' + g" :label="gradeShort(g)" width="54" align="center">
+              <template v-slot="scope">
+                <span class="stats-num" :class="{ zero: !scope.row.after[g] }">{{ scope.row.after[g] || 0 }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="计" width="54" align="center">
+              <template v-slot="scope"><span class="stats-num">{{ gradeCountSum(scope.row.after) }}</span></template>
+            </el-table-column>
+          </el-table-column>
+          <el-table-column label="记录数" prop="total" width="72" align="center" />
+        </el-table>
+      </div>
+      <div v-if="statsTotals.total" class="stats-summary">
+        <strong>合计</strong>（{{ statsTotals.total }} 条）：
+        调色前 —
+        <span v-for="g in gradeOptions" :key="'ts-b-' + g">{{ gradeShort(g) }} {{ statsTotals.before[g] || 0 }}</span>；
+        调色后 —
+        <span v-for="g in gradeOptions" :key="'ts-a-' + g">{{ gradeShort(g) }} {{ statsTotals.after[g] || 0 }}</span>
+      </div>
+    </el-dialog>
   </template>
 </div>
 
@@ -411,6 +550,54 @@
   const NUM_FIELDS = new Set(['id', 'illuminance', 'lstar_before', 'lstar_after']);
   const GRADE_FIELDS = new Set(['grade_before', 'grade_after']);
   const DEFAULT_SORT = { prop: 'id', order: 'descending' };
+  const STAT_DIM_OPTIONS = [
+    { field: 'group_name', label: '实验大组' },
+    { field: 'subgroup_name', label: '实验小组' },
+    { field: 'operator', label: '实验人' },
+    { field: 'camera_device', label: '拍摄设备' },
+    { field: 'light_device', label: '灯光设备' },
+  ];
+  const DEFAULT_STAT_GROUP_BY = ['group_name', 'subgroup_name'];
+
+  function emptyGradeCounts() {
+    return Object.fromEntries(GRADES.map(g => [g, 0]));
+  }
+
+  function normalizeGradeValue(val) {
+    if (val == null || val === '') return null;
+    const s = String(val).trim();
+    if (GRADES.includes(s)) return s;
+    const m = s.match(/(\d)/);
+    return m ? 'Grade' + m[1] : null;
+  }
+
+  function computeGradeStats(records, groupByFields) {
+    const buckets = new Map();
+    const totals = { total: 0, before: emptyGradeCounts(), after: emptyGradeCounts() };
+    for (const rec of records) {
+      const key = groupByFields.map(f => rec[f] ?? '').join('\0');
+      if (!buckets.has(key)) {
+        const row = { total: 0, before: emptyGradeCounts(), after: emptyGradeCounts() };
+        groupByFields.forEach(f => { row[f] = rec[f] ?? ''; });
+        buckets.set(key, row);
+      }
+      const row = buckets.get(key);
+      row.total += 1;
+      totals.total += 1;
+      const gb = normalizeGradeValue(rec.grade_before);
+      const ga = normalizeGradeValue(rec.grade_after);
+      if (gb) { row.before[gb] += 1; totals.before[gb] += 1; }
+      if (ga) { row.after[ga] += 1; totals.after[ga] += 1; }
+    }
+    const rows = [...buckets.values()].sort((a, b) => {
+      for (const f of groupByFields) {
+        const cmp = String(a[f] || '').localeCompare(String(b[f] || ''), 'zh-CN');
+        if (cmp) return cmp;
+      }
+      return 0;
+    });
+    return { rows, totals };
+  }
 
   function compareField(a, b, prop) {
     let va = a[prop], vb = b[prop];
@@ -626,8 +813,24 @@
       const importDialogVisible = ref(false);
       const importLoading = ref(false);
       const debugRuns = ref([]);
-      const importPreview = reactive({ thumb_url: '', summary: '' });
+      const importPreview = reactive({ thumb_url: '', before_url: '', after_url: '', compare_url: '', summary: '' });
+      const compareDialogVisible = ref(false);
+      const compareLoading = ref(false);
+      const compareLoadingId = ref(null);
+      const compareDialog = reactive({
+        before_url: '', after_url: '', compare_url: '',
+        grade_before: '', grade_after: '', lstar_before: null, lstar_after: null, image_rel: '',
+      });
+      const statsDialogVisible = ref(false);
+      const statsGroupBy = ref([...DEFAULT_STAT_GROUP_BY]);
+      const statsRows = ref([]);
+      const statsTotals = reactive({ total: 0, before: emptyGradeCounts(), after: emptyGradeCounts() });
       let skipSubgroupDefaults = false;
+
+      const statDimOptions = STAT_DIM_OPTIONS;
+      const activeStatDims = computed(() =>
+        STAT_DIM_OPTIONS.filter(d => statsGroupBy.value.includes(d.field))
+      );
 
       const debugUiUrl = computed(() => '/debug/ui?key=' + encodeURIComponent(apiKey.value));
 
@@ -647,6 +850,18 @@
       watch(apiKey, v => localStorage.setItem('exp_api_key', v));
 
       const drawerTitle = computed(() => editingId.value ? '编辑记录 #' + editingId.value : '新建记录');
+
+      const formRowForCompare = computed(() => ({
+        id: editingId.value,
+        image_rel: form.image_rel,
+        debug_run_id: form.debug_run_id,
+        image_before_rel: null,
+        image_after_rel: null,
+        grade_before: form.grade_before,
+        grade_after: form.grade_after,
+        lstar_before: form.lstar_before,
+        lstar_after: form.lstar_after,
+      }));
 
       const hasActiveFilters = computed(() => {
         if (globalSearch.value.trim()) return true;
@@ -709,6 +924,40 @@
       }
       function onPageSizeChange() {
         displayLimit.value = pageSize.value;
+      }
+
+      function gradeShort(g) {
+        return String(g).replace('Grade', 'G');
+      }
+
+      function gradeCountSum(counts) {
+        return GRADES.reduce((sum, g) => sum + (counts[g] || 0), 0);
+      }
+
+      function formatStatDim(val) {
+        return val == null || val === '' ? '—' : val;
+      }
+
+      function refreshGradeStats() {
+        if (!statsGroupBy.value.length) {
+          statsRows.value = [];
+          statsTotals.total = 0;
+          Object.assign(statsTotals.before, emptyGradeCounts());
+          Object.assign(statsTotals.after, emptyGradeCounts());
+          ElMessage.warning('请至少选择一个分组维度');
+          return;
+        }
+        const { rows, totals } = computeGradeStats(filteredRecords.value, [...statsGroupBy.value]);
+        statsRows.value = rows;
+        statsTotals.total = totals.total;
+        Object.assign(statsTotals.before, totals.before);
+        Object.assign(statsTotals.after, totals.after);
+      }
+
+      function openGradeStats() {
+        if (!statsGroupBy.value.length) statsGroupBy.value = [...DEFAULT_STAT_GROUP_BY];
+        refreshGradeStats();
+        statsDialogVisible.value = true;
       }
 
       function filterSuggest(list, queryString) {
@@ -842,6 +1091,135 @@
         window.open('/debug/img/file?rel=' + encodeURIComponent(rel) + '&key=' + encodeURIComponent(apiKey.value), '_blank');
       }
 
+      function canCompare(row) {
+        if (!row) return false;
+        if (row.image_before_rel && row.image_after_rel) return true;
+        if (row.debug_run_id) return true;
+        if (row.image_rel) return true;
+        return false;
+      }
+
+      function recordCompareUrls(row) {
+        const key = encodeURIComponent(apiKey.value);
+        if (row.image_before_rel && row.image_after_rel && row.id) {
+          return {
+            before: '/experiments/snapshots/' + row.id + '/before.jpg?key=' + key,
+            after: '/experiments/snapshots/' + row.id + '/after.jpg?key=' + key,
+          };
+        }
+        if (row.debug_run_id) {
+          const base = '/debug/files/' + row.debug_run_id;
+          return {
+            before: base + '/08_iris_before.jpg?key=' + key,
+            after: base + '/09_iris_after.jpg?key=' + key,
+            compare: base + '/07_sclera_before_after.jpg?key=' + key,
+          };
+        }
+        return null;
+      }
+
+      async function ensureCompareImages(row) {
+        if (row.image_before_rel && row.image_after_rel) return row;
+        if (!row.id || (!row.image_rel && !row.debug_run_id)) return row;
+        compareLoadingId.value = row.id;
+        compareLoading.value = true;
+        try {
+          const data = await apiFetch('/experiments/records/' + row.id + '/ensure-compare-images', { method: 'POST' });
+          const idx = allRecords.value.findIndex(r => r.id === row.id);
+          if (idx >= 0) {
+            Object.assign(allRecords.value[idx], {
+              image_before_rel: data.image_before_rel,
+              image_after_rel: data.image_after_rel,
+            });
+            return allRecords.value[idx];
+          }
+          Object.assign(row, {
+            image_before_rel: data.image_before_rel,
+            image_after_rel: data.image_after_rel,
+          });
+          return row;
+        } finally {
+          compareLoadingId.value = null;
+          compareLoading.value = false;
+        }
+      }
+
+      function applyPreviewUrls(payload) {
+        importPreview.thumb_url = payload.thumb_url || payload.image_url || '';
+        importPreview.before_url = payload.thumb_before_url || '';
+        importPreview.after_url = payload.thumb_after_url || '';
+        importPreview.compare_url = payload.compare_url || '';
+        importPreview.summary = payload.summary || '';
+      }
+
+      async function openCompareDialog(row) {
+        if (!canCompare(row)) {
+          ElMessage.warning('该记录没有关联图片，无法对比');
+          return;
+        }
+        let target = row;
+        try {
+          if (row.id && !(row.image_before_rel && row.image_after_rel)) {
+            ElMessage.info('正在生成调色对比图…');
+            target = await ensureCompareImages(row);
+          }
+        } catch (e) {
+          ElMessage.error('生成对比图失败：' + e.message);
+          return;
+        }
+        const urls = recordCompareUrls(target);
+        compareDialog.before_url = urls?.before || '';
+        compareDialog.after_url = urls?.after || '';
+        compareDialog.compare_url = urls?.compare || '';
+        compareDialog.grade_before = target.grade_before || '';
+        compareDialog.grade_after = target.grade_after || '';
+        compareDialog.lstar_before = target.lstar_before;
+        compareDialog.lstar_after = target.lstar_after;
+        compareDialog.image_rel = target.image_rel || '';
+        compareDialogVisible.value = true;
+        if (editingId.value === target.id) setEditPreview(target);
+      }
+
+      async function openCompareFromForm() {
+        await openCompareDialog({
+          id: editingId.value,
+          image_rel: form.image_rel,
+          debug_run_id: form.debug_run_id,
+          image_before_rel: null,
+          image_after_rel: null,
+          grade_before: form.grade_before,
+          grade_after: form.grade_after,
+          lstar_before: form.lstar_before,
+          lstar_after: form.lstar_after,
+        });
+      }
+
+      function openCompareDialogFromPreview() {
+        compareDialog.before_url = importPreview.before_url || '';
+        compareDialog.after_url = importPreview.after_url || '';
+        compareDialog.compare_url = importPreview.compare_url || '';
+        compareDialog.grade_before = form.grade_before || '';
+        compareDialog.grade_after = form.grade_after || '';
+        compareDialog.lstar_before = form.lstar_before;
+        compareDialog.lstar_after = form.lstar_after;
+        compareDialog.image_rel = form.image_rel || '';
+        compareDialogVisible.value = true;
+      }
+
+      function onPreviewCompareError() {
+        if (importPreview.compare_url) {
+          importPreview.before_url = '';
+          importPreview.after_url = '';
+        }
+      }
+
+      function onDialogCompareError() {
+        if (compareDialog.compare_url) {
+          compareDialog.before_url = '';
+          compareDialog.after_url = '';
+        }
+      }
+
       async function loadDebugRuns() {
         importLoading.value = true;
         try {
@@ -868,8 +1246,7 @@
         form.color = payload.color || '';
         form.image_rel = payload.image_rel || '';
         form.debug_run_id = payload.debug_run_id || '';
-        importPreview.thumb_url = payload.thumb_url || payload.image_url || '';
-        importPreview.summary = payload.summary || '';
+        applyPreviewUrls(payload);
         const noteLine = payload.summary || '';
         const tag = payload.debug_run_id || (payload.image_rel ? 'session' : '');
         if (noteLine && tag && !String(form.notes || '').includes(tag)) {
@@ -940,9 +1317,38 @@
         editingId.value = null;
         Object.assign(form, emptyForm());
         importPreview.thumb_url = '';
+        importPreview.before_url = '';
+        importPreview.after_url = '';
+        importPreview.compare_url = '';
         importPreview.summary = '';
         drawerVisible.value = true;
         await fillSuggestedNames(true);
+      }
+
+      function setEditPreview(row) {
+        const key = encodeURIComponent(apiKey.value);
+        if (row.image_before_rel && row.image_after_rel) {
+          importPreview.before_url = '/experiments/snapshots/' + row.id + '/before.jpg?key=' + key;
+          importPreview.after_url = '/experiments/snapshots/' + row.id + '/after.jpg?key=' + key;
+          importPreview.compare_url = '';
+          importPreview.thumb_url = row.image_rel
+            ? '/debug/img/file?rel=' + encodeURIComponent(row.image_rel) + '&key=' + key
+            : importPreview.before_url;
+        } else if (row.debug_run_id) {
+          const base = '/debug/files/' + row.debug_run_id;
+          importPreview.before_url = base + '/08_iris_before.jpg?key=' + key;
+          importPreview.after_url = base + '/09_iris_after.jpg?key=' + key;
+          importPreview.compare_url = base + '/07_sclera_before_after.jpg?key=' + key;
+          importPreview.thumb_url = base + '/00_original.jpg?key=' + key;
+        } else {
+          importPreview.before_url = '';
+          importPreview.after_url = '';
+          importPreview.compare_url = '';
+          importPreview.thumb_url = row.image_rel
+            ? '/debug/img/file?rel=' + encodeURIComponent(row.image_rel) + '&key=' + key
+            : '';
+        }
+        importPreview.summary = row.image_rel ? ('img:' + row.image_rel) : '';
       }
 
       function openEdit(row) {
@@ -956,10 +1362,7 @@
           grade_after: row.grade_after||'', lstar_after: row.lstar_after??undefined, notes: row.notes||'',
           image_rel: row.image_rel||'', debug_run_id: row.debug_run_id||'',
         });
-        importPreview.thumb_url = row.debug_run_id
-          ? '/debug/files/' + row.debug_run_id + '/00_original.jpg?key=' + encodeURIComponent(apiKey.value)
-          : (row.image_rel ? '/debug/img/file?rel=' + encodeURIComponent(row.image_rel) + '&key=' + encodeURIComponent(apiKey.value) : '');
-        importPreview.summary = row.image_rel ? ('img:' + row.image_rel) : '';
+        setEditPreview(row);
         drawerVisible.value = true;
         skipSubgroupDefaults = false;
       }
@@ -1024,12 +1427,16 @@
         pageSize, displayLimit, filteredRecords, pagedRecords, canLoadMore, hasActiveFilters, hasActiveSort,
         gradeOptions, colorOptions, blueColors, greenColors, brownColors,
         importDialogVisible, importLoading, debugRuns, importPreview, debugUiUrl,
+        compareDialogVisible, compareDialog, compareLoading, compareLoadingId, formRowForCompare,
+        statsDialogVisible, statsGroupBy, statsRows, statsTotals, statDimOptions, activeStatDims,
         refreshAll, openCreate, openEdit, saveForm, deleteOne, bulkDelete, suggestNames,
+        openGradeStats, refreshGradeStats, gradeShort, gradeCountSum, formatStatDim,
         suggestOperator, suggestCamera, suggestLight, suggestColor, suggestGrade,
         suggestGroupName, suggestSubgroupName, onGroupSubgroupChange,
         onSelectionChange, fmtLstar, onHeaderSort, onHeaderFilter,
         resetAllFilters, loadMore, onPageSizeChange,
         openImportDialog, importFromRun, openDebugUi, openDebugViewer, openImagePreview,
+        canCompare, openCompareDialog, openCompareFromForm, openCompareDialogFromPreview, onPreviewCompareError, onDialogCompareError,
       };
     },
   });

@@ -169,6 +169,10 @@ def _sqlite_migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE experiment_records ADD COLUMN image_rel TEXT")
     if "debug_run_id" not in cols:
         conn.execute("ALTER TABLE experiment_records ADD COLUMN debug_run_id TEXT")
+    if "image_before_rel" not in cols:
+        conn.execute("ALTER TABLE experiment_records ADD COLUMN image_before_rel TEXT")
+    if "image_after_rel" not in cols:
+        conn.execute("ALTER TABLE experiment_records ADD COLUMN image_after_rel TEXT")
 
 
 def _mysql_migrate(conn) -> None:
@@ -179,6 +183,12 @@ def _mysql_migrate(conn) -> None:
         cur.execute("SHOW COLUMNS FROM experiment_records LIKE 'debug_run_id'")
         if not cur.fetchone():
             cur.execute("ALTER TABLE experiment_records ADD COLUMN debug_run_id VARCHAR(32) NULL")
+        cur.execute("SHOW COLUMNS FROM experiment_records LIKE 'image_before_rel'")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE experiment_records ADD COLUMN image_before_rel VARCHAR(512) NULL")
+        cur.execute("SHOW COLUMNS FROM experiment_records LIKE 'image_after_rel'")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE experiment_records ADD COLUMN image_after_rel VARCHAR(512) NULL")
     conn.commit()
 
 
@@ -194,6 +204,15 @@ class ExperimentStore(ABC):
 
     @abstractmethod
     def update_record(self, record_id: int, data: dict[str, Any]) -> Optional[dict[str, Any]]: ...
+
+    @abstractmethod
+    def update_record_images(
+        self,
+        record_id: int,
+        *,
+        image_before_rel: Optional[str],
+        image_after_rel: Optional[str],
+    ) -> Optional[dict[str, Any]]: ...
 
     @abstractmethod
     def delete_record(self, record_id: int) -> bool: ...
@@ -418,6 +437,27 @@ class SqliteExperimentStore(ExperimentStore):
         result = self.get_by_id(record_id)
         assert result is not None
         return result
+
+    def update_record_images(
+        self,
+        record_id: int,
+        *,
+        image_before_rel: Optional[str],
+        image_after_rel: Optional[str],
+    ) -> Optional[dict[str, Any]]:
+        if not self.get_by_id(record_id):
+            return None
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE experiment_records SET
+                    image_before_rel = ?, image_after_rel = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (image_before_rel, image_after_rel, now, record_id),
+            )
+        return self.get_by_id(record_id)
 
     def update_record(self, record_id: int, data: dict[str, Any]) -> Optional[dict[str, Any]]:
         if not self.get_by_id(record_id):
@@ -681,6 +721,35 @@ class MysqlExperimentStore(ExperimentStore):
         result = self.get_by_id(record_id)
         assert result is not None
         return result
+
+    def update_record_images(
+        self,
+        record_id: int,
+        *,
+        image_before_rel: Optional[str],
+        image_after_rel: Optional[str],
+    ) -> Optional[dict[str, Any]]:
+        if not self.get_by_id(record_id):
+            return None
+        now = _utc_now()
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE experiment_records SET
+                        image_before_rel = %s, image_after_rel = %s, updated_at = %s
+                    WHERE id = %s
+                    """,
+                    (image_before_rel, image_after_rel, now, record_id),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        return self.get_by_id(record_id)
 
     def update_record(self, record_id: int, data: dict[str, Any]) -> Optional[dict[str, Any]]:
         if not self.get_by_id(record_id):

@@ -506,6 +506,13 @@ def build_debug_images(
     hv = int(highlight_v if highlight_v is not None else 240)
     compare = compute_color_correction_compare(pipeline, config, hv)
     images["07_sclera_before_after"] = draw_sclera_before_after(pipeline, compare)
+    before_img = pipeline.work_image
+    if compare.get("applied") and pipeline.sclera_gains is not None:
+        after_img = _apply_gains_bgr(pipeline.work_image, pipeline.sclera_gains)
+    else:
+        after_img = before_img
+    images["08_iris_before"] = _iris_crop(before_img, pipeline)
+    images["09_iris_after"] = _iris_crop(after_img, pipeline)
     return {name: _shrink_to_max_dim(img, max_dim) for name, img in images.items()}
 
 

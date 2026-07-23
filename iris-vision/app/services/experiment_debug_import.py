@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Optional
 
+import cv2
+import numpy as np
+
 from app.services.experiment_store import COLOR_VALUES
+
+_COMPARE_PANEL_W = 420
+_COMPARE_GAP_W = 12
+_COMPARE_FOOTER_H = 56
 
 # classify_iris_color 中文标签 → 实验记录 9 色
 IRIS_LABEL_TO_COLOR = {
@@ -60,6 +68,175 @@ def _side_metrics(side: Optional[dict]) -> dict[str, Any]:
     }
 
 
+def debug_run_image_urls(run_id: str, api_key: str) -> dict[str, str]:
+    """Debug run 内原图 / 调色前后虹膜裁切 / 完整对比图 URL。"""
+    base = f"/debug/files/{run_id}"
+    key_q = f"?key={api_key}"
+    return {
+        "thumb_url": f"{base}/00_original.jpg{key_q}",
+        "compare_url": f"{base}/07_sclera_before_after.jpg{key_q}",
+        "thumb_before_url": f"{base}/08_iris_before.jpg{key_q}",
+        "thumb_after_url": f"{base}/09_iris_after.jpg{key_q}",
+        "viewer_url": f"/debug/viewer/{run_id}{key_q}",
+    }
+
+
+def experiment_snapshot_urls(record_id: int, api_key: str) -> dict[str, str]:
+    """已持久化到实验快照目录的调色前后图 URL。"""
+    base = f"/experiments/snapshots/{record_id}"
+    key_q = f"?key={api_key}"
+    return {
+        "thumb_before_url": f"{base}/before.jpg{key_q}",
+        "thumb_after_url": f"{base}/after.jpg{key_q}",
+    }
+
+
+def _split_compare_panel_array(
+    img: np.ndarray,
+) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """从 07 对比图数组拆出左右面板。"""
+    canvas_h = img.shape[0] - _COMPARE_FOOTER_H
+    if canvas_h <= 0:
+        return None, None
+    canvas = img[:canvas_h]
+    need_w = _COMPARE_PANEL_W + _COMPARE_GAP_W + _COMPARE_PANEL_W
+    if canvas.shape[1] < need_w:
+        return None, None
+    left = canvas[:, :_COMPARE_PANEL_W]
+    right = canvas[:, _COMPARE_PANEL_W + _COMPARE_GAP_W : need_w]
+    return left, right
+
+
+def _split_compare_panel(combined_path: Path) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """从 07 对比图拆出左右面板（兼容旧 debug run 无 08/09 的情况）。"""
+    img = cv2.imread(str(combined_path))
+    if img is None:
+        return None, None
+    return _split_compare_panel_array(img)
+
+
+def _write_compare_pair(
+    dest_dir: Path,
+    before_img: np.ndarray,
+    after_img: np.ndarray,
+    record_id: int,
+) -> dict[str, str]:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(dest_dir / "before.jpg"), before_img)
+    cv2.imwrite(str(dest_dir / "after.jpg"), after_img)
+    return {
+        "image_before_rel": f"{record_id}/before.jpg",
+        "image_after_rel": f"{record_id}/after.jpg",
+    }
+
+
+def _imread_unicode(path: Path) -> Optional[np.ndarray]:
+    try:
+        data = np.fromfile(str(path), dtype=np.uint8)
+    except OSError:
+        return None
+    if data.size == 0:
+        return None
+    return cv2.imdecode(data, cv2.IMREAD_COLOR)
+
+
+def generate_compare_snapshots_from_image_rel(
+    img_root: Path,
+    snapshot_root: Path,
+    record_id: int,
+    image_rel: str,
+    config: dict,
+    config_path: Path,
+) -> dict[str, Optional[str]]:
+    """对 img/ 原图重新识别，生成并持久化调色前后虹膜裁切图。"""
+    from app.services.debug_viz import build_debug_images
+    from app.services.pipeline import AnalysisError, run_analysis
+
+    rel = (image_rel or "").replace("\\", "/").lstrip("/")
+    if not rel or ".." in rel:
+        raise ValueError("invalid_image_rel")
+    target = (img_root / rel).resolve()
+    root_resolved = img_root.resolve()
+    if not str(target).startswith(str(root_resolved)):
+        raise ValueError("invalid_image_rel")
+    if not target.is_file():
+        raise ValueError("image_not_found")
+
+    image_bgr = _imread_unicode(target)
+    if image_bgr is None:
+        raise ValueError("invalid_image_format")
+
+    try:
+        pipeline = run_analysis(image_bgr, config, config_path)
+    except AnalysisError as exc:
+        raise ValueError(str(exc)) from exc
+
+    highlight_v = int(config.get("highlight_v_threshold", 240))
+    eye_cfg = config.get("eye_closeup", {})
+    images = build_debug_images(
+        pipeline,
+        eye_cfg,
+        config=config,
+        highlight_v=highlight_v,
+    )
+    dest_dir = snapshot_root / str(record_id)
+    before = images.get("08_iris_before")
+    after = images.get("09_iris_after")
+    if before is not None and after is not None:
+        return _write_compare_pair(dest_dir, before, after, record_id)
+
+    panel = images.get("07_sclera_before_after")
+    if panel is not None:
+        left, right = _split_compare_panel_array(panel)
+        if left is not None and right is not None:
+            return _write_compare_pair(dest_dir, left, right, record_id)
+
+    return {"image_before_rel": None, "image_after_rel": None}
+
+
+def snapshot_compare_images(
+    debug_output_root: Path,
+    snapshot_root: Path,
+    record_id: int,
+    debug_run_id: str,
+) -> dict[str, Optional[str]]:
+    """
+    将 debug run 的调色前后图复制到实验快照目录，便于长期保留。
+    返回 image_before_rel / image_after_rel（相对 snapshot_root）。
+    """
+    if ".." in debug_run_id or "/" in debug_run_id or "\\" in debug_run_id:
+        return {"image_before_rel": None, "image_after_rel": None}
+
+    run_dir = debug_output_root / debug_run_id
+    if not run_dir.is_dir():
+        return {"image_before_rel": None, "image_after_rel": None}
+
+    dest_dir = snapshot_root / str(record_id)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    before_dest = dest_dir / "before.jpg"
+    after_dest = dest_dir / "after.jpg"
+
+    before_src = run_dir / "08_iris_before.jpg"
+    after_src = run_dir / "09_iris_after.jpg"
+    if before_src.exists() and after_src.exists():
+        shutil.copy2(before_src, before_dest)
+        shutil.copy2(after_src, after_dest)
+    else:
+        panel_path = run_dir / "07_sclera_before_after.jpg"
+        if not panel_path.exists():
+            return {"image_before_rel": None, "image_after_rel": None}
+        left, right = _split_compare_panel(panel_path)
+        if left is None or right is None:
+            return {"image_before_rel": None, "image_after_rel": None}
+        cv2.imwrite(str(before_dest), left)
+        cv2.imwrite(str(after_dest), right)
+
+    return {
+        "image_before_rel": f"{record_id}/before.jpg",
+        "image_after_rel": f"{record_id}/after.jpg",
+    }
+
+
 def metrics_to_import_payload(metrics: dict, run_id: Optional[str] = None) -> dict[str, Any]:
     """将 debug metrics 转为实验记录表单预填数据（run_id 可选，无磁盘保存时也可导入）。"""
     compare = metrics.get("color_correction") or {}
@@ -77,8 +254,9 @@ def metrics_to_import_payload(metrics: dict, run_id: Optional[str] = None) -> di
     source_rel = metrics.get("source_rel") or metrics.get("image_rel")
     source_name = metrics.get("source_filename") or metrics.get("original_filename")
 
-    thumb_url = f"/debug/files/{run_id}/00_original.jpg" if run_id else None
-    viewer_url = f"/debug/viewer/{run_id}" if run_id else None
+    urls = debug_run_image_urls(run_id, "") if run_id else {}
+    thumb_url = urls.get("thumb_url")
+    viewer_url = urls.get("viewer_url")
 
     return {
         "debug_run_id": run_id or None,
@@ -93,6 +271,9 @@ def metrics_to_import_payload(metrics: dict, run_id: Optional[str] = None) -> di
         "color_after": after.get("color"),
         "iris_color_label": after.get("iris_color_label") or before.get("iris_color_label"),
         "thumb_url": thumb_url,
+        "thumb_before_url": urls.get("thumb_before_url"),
+        "thumb_after_url": urls.get("thumb_after_url"),
+        "compare_url": urls.get("compare_url"),
         "viewer_url": viewer_url,
         "manual_adjusted": bool(metrics.get("manual_adjusted")),
         "detection_method": metrics.get("detection_method"),
@@ -105,10 +286,16 @@ def enrich_import_payload_urls(payload: dict[str, Any], api_key: str) -> dict[st
     out = dict(payload)
     run_id = out.get("debug_run_id")
     if run_id:
-        if out.get("thumb_url") and "?" not in out["thumb_url"]:
-            out["thumb_url"] = f"{out['thumb_url']}?key={api_key}"
-        if out.get("viewer_url") and "?" not in out["viewer_url"]:
-            out["viewer_url"] = f"{out['viewer_url']}?key={api_key}"
+        urls = debug_run_image_urls(run_id, api_key)
+        for key in (
+            "thumb_url",
+            "thumb_before_url",
+            "thumb_after_url",
+            "compare_url",
+            "viewer_url",
+        ):
+            if urls.get(key):
+                out[key] = urls[key]
     if out.get("image_rel"):
         out["image_url"] = f"/debug/img/file?rel={out['image_rel']}&key={api_key}"
         if not out.get("thumb_url"):

@@ -403,6 +403,8 @@ async def debug_viewer(
         ("05_ring_mask_only", "环带 mask 伪彩色"),
         ("06_sclera_samples", "巩膜参考采样（品红=采样像素，黄圆=环带）"),
         ("07_sclera_before_after", "巩膜调色前 / 调色后对比（裁切 + Lab 色块）"),
+        ("08_iris_before", "调色前虹膜裁切"),
+        ("09_iris_after", "调色后虹膜裁切"),
     ]
     items = ""
     for key_name, title in panels:
