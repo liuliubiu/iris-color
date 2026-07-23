@@ -7,3 +7,4 @@ numpy>=1.26.0
 colorspacious>=1.1.2
 pillow>=10.2.0
 pyyaml>=6.0.1
+pymysql>=1.1.0
