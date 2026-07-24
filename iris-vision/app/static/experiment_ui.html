@@ -1127,7 +1127,6 @@
           if (form.subgroup_name?.trim()) q.subgroup_name = form.subgroup_name.trim();
           const data = await apiFetch('/experiments/meta/suggest-names', { query: q });
           if (!form.group_name?.trim()) form.group_name = data.group_name || '';
-          if (!form.subgroup_name?.trim()) form.subgroup_name = data.subgroup_name || '';
           if (andSubgroupDefaults && data.subgroup_defaults) {
             applySubgroupDefaultsFrom(data.subgroup_defaults);
           } else if (andSubgroupDefaults && form.subgroup_name?.trim()) {
@@ -1385,14 +1384,10 @@
 
       async function openImportDrawer(payload, experimentContext) {
         editingId.value = null;
+        Object.assign(form, emptyForm());
         const ctx = experimentContext || takeImportContext();
-        if (!drawerVisible.value) {
-          Object.assign(form, emptyForm());
-          if (ctx) applyExperimentContext(ctx);
-          else await fillSuggestedNames(true);
-        } else if (ctx) {
-          applyExperimentContext(ctx);
-        }
+        if (ctx) applyExperimentContext(ctx);
+        else await fillSuggestedNames(true);
         applyImportPayload(payload);
         importDialogVisible.value = false;
         drawerVisible.value = true;
@@ -1408,15 +1403,21 @@
         }
       }
 
+      async function importDraftPayload(draft) {
+        if (!draft || !draft.metrics) {
+          throw new Error('缺少识别 metrics 数据');
+        }
+        const payload = await apiFetch('/experiments/import/from-metrics', { method: 'POST', body: draft });
+        await openImportDrawer(payload, draft.experiment_context || null);
+      }
+
       async function tryImportFromUrl() {
         if (params.get('import_draft')) {
           const raw = sessionStorage.getItem('exp_import_draft');
           sessionStorage.removeItem('exp_import_draft');
           if (raw) {
             try {
-              const draft = JSON.parse(raw);
-              const payload = await apiFetch('/experiments/import/from-metrics', { method: 'POST', body: draft });
-              await openImportDrawer(payload, draft.experiment_context || null);
+              await importDraftPayload(JSON.parse(raw));
             } catch (e) {
               ElMessage.error('导入当前识别结果失败：' + e.message);
             }
@@ -1426,6 +1427,37 @@
         const runId = params.get('import_run');
         if (!runId) return;
         await importFromRun(runId);
+      }
+
+      async function handleDebugImportMessage(msg) {
+        if (!msg || msg.type !== 'debug_import') return;
+        try {
+          if (msg.import_draft) {
+            let draft = msg.draft || null;
+            if (!draft) {
+              const raw = sessionStorage.getItem('exp_import_draft');
+              sessionStorage.removeItem('exp_import_draft');
+              if (raw) draft = JSON.parse(raw);
+            } else {
+              sessionStorage.removeItem('exp_import_draft');
+            }
+            if (!draft) return;
+            await importDraftPayload(draft);
+            return;
+          }
+          if (msg.import_run) {
+            await importFromRun(msg.import_run);
+          }
+        } catch (e) {
+          ElMessage.error('导入失败：' + e.message);
+        }
+      }
+
+      function setupDebugImportListener() {
+        try {
+          const channel = new BroadcastChannel('iris-experiment-import');
+          channel.onmessage = (event) => { handleDebugImportMessage(event.data || {}); };
+        } catch (_) {}
       }
 
       async function suggestNames() {
@@ -1524,6 +1556,12 @@
             } catch (_) {}
           }
           drawerVisible.value = false;
+          Object.assign(form, emptyForm());
+          importPreview.thumb_url = '';
+          importPreview.before_url = '';
+          importPreview.after_url = '';
+          importPreview.compare_url = '';
+          importPreview.summary = '';
           await loadRecords();
           if (!isEdit) resetAllFilters();
         } catch (e) { ElMessage.error('保存失败：' + e.message); }
@@ -1558,6 +1596,7 @@
       watch(globalSearch, () => { displayLimit.value = pageSize.value; });
 
       onMounted(async () => {
+        setupDebugImportListener();
         await refreshAll();
         await tryImportFromUrl();
       });

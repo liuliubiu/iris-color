@@ -334,6 +334,39 @@
       font-size: 11px;
     }
     #imgSelectStatus.busy { color: #79c0ff; }
+    .folder-nav {
+      margin: 8px 0;
+      padding: 8px 10px;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      background: #161b22;
+    }
+    .folder-nav-head {
+      font-size: 11px;
+      color: #8b949e;
+      margin-bottom: 6px;
+      word-break: break-all;
+    }
+    .folder-nav .btn-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 6px;
+      align-items: center;
+    }
+    .folder-nav select {
+      width: 100%;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid #30363d;
+      background: #0d1117;
+      color: #e6edf3;
+      font-size: 12px;
+    }
+    .folder-nav button {
+      white-space: nowrap;
+      padding: 6px 10px;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
@@ -354,6 +387,14 @@
           <option value="">— 载入列表后选择 —</option>
         </select>
         <div class="img-path" id="imgSelectStatus"></div>
+        <div class="folder-nav" id="folderNav" hidden>
+          <div class="folder-nav-head" id="folderNavLabel">同文件夹</div>
+          <div class="btn-row">
+            <button type="button" id="btnPrevUnmarked" title="上一张">◀ 上一张</button>
+            <select id="folderUnmarkedSelect"></select>
+            <button type="button" id="btnNextUnmarked" title="下一张">下一张 ▶</button>
+          </div>
+        </div>
         <div class="btn-row">
           <button type="button" id="btnLoadImgList">刷新 img 列表</button>
         </div>
@@ -500,12 +541,15 @@
     let dragMode = null
     let analyzing = false
     let suppressImgSelectChange = false
+    let suppressFolderSelectChange = false
+    let suppressExpSubgroupChange = false
     let activeFolderPrefix = ''
     let lastGroupRefresh = 0
     let experimentWin = null
 
     const EXP_WIN_NAME = 'iris_experiment_ui'
     const EXP_SYNC_CHANNEL = 'iris-experiment-sync'
+    const EXP_IMPORT_CHANNEL = 'iris-experiment-import'
 
     const STAGE_LABELS = {
       '00_original': '原图',
@@ -539,13 +583,41 @@
       localStorage.setItem(EXP_PREFS_KEY, JSON.stringify(collectExperimentContext()))
     }
 
-    function fillSelectOptions(select, values, selected) {
+    function getPreferredSubgroup() {
+      const dom = document.getElementById('expSubgroupName')?.value?.trim() || ''
+      const prefs = loadExpPrefs().subgroup_name?.trim() || ''
+      return dom || prefs
+    }
+
+    function setSubgroupSelection(value) {
+      const subSelect = document.getElementById('expSubgroupName')
+      const val = value == null ? '' : String(value).trim()
+      if (!subSelect || !val) return
+      suppressExpSubgroupChange = true
+      if (![...subSelect.options].some((opt) => opt.value === val)) {
+        subSelect.add(new Option(val, val))
+      }
+      subSelect.value = val
+      suppressExpSubgroupChange = false
+    }
+
+    function fillSelectOptions(select, values, selected, { lockSelection = false } = {}) {
       const uniq = [...new Set((values || []).filter(Boolean))]
-      select.innerHTML = uniq.map((v) =>
+      let html = uniq.map((v) =>
         `<option value="${String(v).replace(/"/g, '&quot;')}">${v}</option>`
-      ).join('') || '<option value="">— 暂无 —</option>'
-      if (selected && uniq.includes(selected)) select.value = selected
-      else if (uniq.length) select.value = uniq[0]
+      ).join('')
+      const selectedStr = selected == null ? '' : String(selected).trim()
+      if (selectedStr && !uniq.includes(selectedStr)) {
+        html += `<option value="${String(selectedStr).replace(/"/g, '&quot;')}">${selectedStr}</option>`
+      }
+      select.innerHTML = html || '<option value="">— 暂无 —</option>'
+      if (selectedStr) {
+        select.value = selectedStr
+      } else if (!lockSelection && uniq.length) {
+        select.value = uniq[0]
+      } else {
+        select.value = ''
+      }
     }
 
     function fillOptionalSelect(select, values, selected) {
@@ -564,6 +636,29 @@
 
     function isImgMarked(item) {
       return item.grade_prefix != null
+    }
+
+    function getSortedFolderItems(folder) {
+      if (!folder) return []
+      return imgFileList
+        .filter((item) => getFolderPrefix(item.rel) === folder)
+        .sort((a, b) => a.rel.localeCompare(b.rel, 'zh-CN'))
+    }
+
+    function findNextInFolder(folder, afterRel) {
+      const sorted = getSortedFolderItems(folder)
+      if (!sorted.length) return null
+      const startIdx = afterRel ? sorted.findIndex((item) => item.rel === afterRel) : -1
+      if (startIdx < 0) return sorted[0]
+      return startIdx + 1 < sorted.length ? sorted[startIdx + 1] : null
+    }
+
+    function findPrevInFolder(folder, beforeRel) {
+      const sorted = getSortedFolderItems(folder)
+      if (!sorted.length) return null
+      const startIdx = beforeRel ? sorted.findIndex((item) => item.rel === beforeRel) : sorted.length
+      if (startIdx < 0) return sorted[sorted.length - 1]
+      return startIdx - 1 >= 0 ? sorted[startIdx - 1] : null
     }
 
     function sortImgListForSelect(items, activeFolder) {
@@ -589,6 +684,63 @@
       return `<option value="${safeRel}">${item.rel}${tag}</option>`
     }
 
+    function renderFolderUnmarkedSelect(selectedRel) {
+      const select = document.getElementById('folderUnmarkedSelect')
+      const nav = document.getElementById('folderNav')
+      const label = document.getElementById('folderNavLabel')
+      const folder = activeFolderPrefix || getFolderPrefix(selectedRel || currentImgRel)
+      const btnPrev = document.getElementById('btnPrevUnmarked')
+      const btnNext = document.getElementById('btnNextUnmarked')
+      const activeRel = selectedRel || currentImgRel || ''
+      if (!folder) {
+        nav.hidden = true
+        select.innerHTML = '<option value="">—</option>'
+        select.title = ''
+        return
+      }
+      const folderItems = getSortedFolderItems(folder)
+      const prevItem = findPrevInFolder(folder, activeRel)
+      const nextItem = findNextInFolder(folder, activeRel)
+      nav.hidden = false
+      label.textContent = folder
+      label.title = folder
+      btnPrev.title = prevItem ? prevItem.rel : '已是第一张'
+      btnNext.title = nextItem ? nextItem.rel : '已是最后一张'
+      if (!folderItems.length) {
+        select.innerHTML = '<option value="">（空文件夹）</option>'
+        select.disabled = true
+        select.title = folder
+        btnPrev.disabled = true
+        btnNext.disabled = true
+        return
+      }
+      const currentIdx = activeRel ? folderItems.findIndex((item) => item.rel === activeRel) : -1
+      if (currentIdx >= 0) {
+        label.textContent = `${folder} · ${currentIdx + 1}/${folderItems.length} 张`
+      } else {
+        label.textContent = `${folder} · ${folderItems.length} 张`
+      }
+      select.disabled = analyzing
+      select.innerHTML = folderItems.map((item, idx) => {
+        const name = item.name || item.rel.split('/').pop()
+        const markTag = isImgMarked(item) ? ' [已标记]' : ''
+        const safeRel = String(item.rel).replace(/"/g, '&quot;')
+        const safeTitle = String(item.rel).replace(/"/g, '&quot;')
+        return `<option value="${safeRel}" title="${safeTitle}">${idx + 1}. ${name}${markTag}</option>`
+      }).join('')
+      suppressFolderSelectChange = true
+      if (currentIdx >= 0) {
+        select.value = activeRel
+      } else {
+        select.value = folderItems[0].rel
+      }
+      suppressFolderSelectChange = false
+      select.title = currentIdx >= 0 ? activeRel : folderItems[0].rel
+      const disableNav = analyzing || folderItems.length < 2
+      btnPrev.disabled = disableNav
+      btnNext.disabled = disableNav
+    }
+
     function renderImgSelectOptions(selectedRel) {
       const select = document.getElementById('imgSelect')
       const activeFolder = activeFolderPrefix || getFolderPrefix(selectedRel)
@@ -611,13 +763,30 @@
       }
       suppressImgSelectChange = true
       select.innerHTML = html
-      if (selectedRel) select.value = selectedRel
+      const selectedItem = selectedRel ? imgFileList.find((item) => item.rel === selectedRel) : null
+      const mainSelectRel = selectedItem && isImgMarked(selectedItem) ? '' : selectedRel
+      if (mainSelectRel) select.value = mainSelectRel
       suppressImgSelectChange = false
+      renderFolderUnmarkedSelect(selectedRel)
     }
 
     function resortImgSelect() {
       if (!imgFileList.length) return
-      renderImgSelectOptions(document.getElementById('imgSelect').value || currentImgRel || '')
+      const selectedRel = document.getElementById('imgSelect').value || currentImgRel || ''
+      renderImgSelectOptions(selectedRel)
+    }
+
+    async function navigateFolderUnmarked(delta) {
+      const folder = activeFolderPrefix || getFolderPrefix(currentImgRel)
+      if (!folder) return
+      const item = delta > 0
+        ? findNextInFolder(folder, currentImgRel)
+        : findPrevInFolder(folder, currentImgRel)
+      if (!item) {
+        setAnalyzeStatus(delta > 0 ? '已是本文件夹最后一张' : '已是本文件夹第一张')
+        return
+      }
+      await loadImgFromRel(item.rel)
     }
 
     function setAnalyzeStatus(text, busy = false) {
@@ -653,17 +822,16 @@
 
     async function applyPathInferredFields(rel) {
       if (!rel) return
-      await applyExpSubgroupDefaults()
       const inferred = inferFieldsFromImagePath(rel)
       if (inferred.operator) document.getElementById('expOperator').value = inferred.operator
       if (inferred.camera_device) document.getElementById('expCamera').value = inferred.camera_device
       saveExpPrefs()
     }
 
-    async function refreshExperimentGroups(opts = {}) {
-      const { advanceSubgroup = false, savedGroup = '', savedSubgroup = '' } = opts
+    async function refreshExperimentGroups({ reloadSubgroupList = false } = {}) {
       const groupSelect = document.getElementById('expGroupName')
       const currentGroup = groupSelect.value.trim()
+      const currentSubgroup = getPreferredSubgroup()
       const currentOperator = document.getElementById('expOperator').value
       const currentCamera = document.getElementById('expCamera').value
       const currentLight = document.getElementById('expLight').value
@@ -680,16 +848,9 @@
         fillOptionalSelect(document.getElementById('expCamera'), options.camera_device, currentCamera)
         fillOptionalSelect(document.getElementById('expLight'), options.light_device, currentLight)
         const targetGroup = groupSelect.value.trim()
-        let preferredSubgroup = document.getElementById('expSubgroupName').value
-        if (advanceSubgroup && savedGroup && savedGroup === targetGroup && savedSubgroup) {
-          try {
-            const suggest = await expApiFetch('/experiments/meta/suggest-names', {
-              query: { group_name: targetGroup, date: todayStr() },
-            })
-            if (suggest.subgroup_name) preferredSubgroup = suggest.subgroup_name
-          } catch (_) {}
+        if (reloadSubgroupList) {
+          await loadSubgroupOptions(targetGroup, currentSubgroup, { includeSuggest: true })
         }
-        await loadSubgroupOptions(targetGroup, preferredSubgroup)
         lastGroupRefresh = Date.now()
       } catch (_) {}
     }
@@ -697,14 +858,15 @@
     function setupExperimentSync() {
       try {
         const channel = new BroadcastChannel(EXP_SYNC_CHANNEL)
-        channel.onmessage = (event) => {
+        channel.onmessage = async (event) => {
           const data = event.data || {}
           if (data.type !== 'record_saved') return
-          refreshExperimentGroups({
-            advanceSubgroup: true,
-            savedGroup: data.group_name || '',
-            savedSubgroup: data.subgroup_name || '',
-          })
+          const savedSubgroup = data.subgroup_name || getPreferredSubgroup()
+          await refreshExperimentGroups({ reloadSubgroupList: true })
+          if (savedSubgroup) {
+            setSubgroupSelection(savedSubgroup)
+            saveExpPrefs()
+          }
         }
       } catch (_) {}
 
@@ -719,15 +881,55 @@
       })
     }
 
-    function openExperimentImport(url) {
+    function buildExperimentImportDraft() {
+      return {
+        metrics: lastMetrics,
+        source_rel: currentImgRel || null,
+        source_filename: currentImgRel ? currentImgRel.split('/').pop() : null,
+        skip_quality: lastSkipQuality,
+        manual_adjusted: lastManualAdjusted,
+        experiment_context: collectExperimentContext(),
+      }
+    }
+
+    function openExperimentImport(url, { importRun = null, importDraft = false, draft = null } = {}) {
       const sep = url.includes('?') ? '&' : '?'
       const fullUrl = `${url}${sep}t=${Date.now()}`
-      if (experimentWin && !experimentWin.closed) {
-        experimentWin.location.href = fullUrl
-        experimentWin.focus()
-      } else {
-        experimentWin = window.open(fullUrl, EXP_WIN_NAME)
+
+      try {
+        new BroadcastChannel(EXP_IMPORT_CHANNEL).postMessage({
+          type: 'debug_import',
+          import_run: importRun,
+          import_draft: importDraft,
+          draft,
+        })
+      } catch (_) {}
+
+      let targetWin = null
+      try {
+        targetWin = window.open('', EXP_WIN_NAME)
+      } catch (_) {}
+
+      if (targetWin && !targetWin.closed) {
+        experimentWin = targetWin
+        let onExperimentPage = false
+        try {
+          onExperimentPage = /\/experiments\/ui/.test(targetWin.location.pathname)
+        } catch (_) {}
+        if (onExperimentPage) {
+          targetWin.focus()
+          return
+        }
+        try {
+          targetWin.location.href = fullUrl
+          targetWin.focus()
+        } catch (_) {
+          experimentWin = window.open(fullUrl, EXP_WIN_NAME)
+        }
+        return
       }
+
+      experimentWin = window.open(fullUrl, EXP_WIN_NAME)
     }
 
     async function expApiFetch(path, opts = {}) {
@@ -751,25 +953,30 @@
       return res.json()
     }
 
-    async function loadSubgroupOptions(groupName, preferred) {
+    async function loadSubgroupOptions(groupName, preferred, { includeSuggest = true } = {}) {
       const subSelect = document.getElementById('expSubgroupName')
+      const keep = preferred !== undefined && preferred !== null ? preferred : getPreferredSubgroup()
       let subs = []
       if (groupName) {
         try {
           const data = await expApiFetch('/experiments/records', { query: { group_name: groupName } })
           subs = [...new Set((data.records || []).map((r) => r.subgroup_name).filter(Boolean))]
         } catch (_) {}
-        try {
-          const suggest = await expApiFetch('/experiments/meta/suggest-names', {
-            query: { group_name: groupName, date: todayStr() },
-          })
-          if (suggest.subgroup_name && !subs.includes(suggest.subgroup_name)) {
-            subs.push(suggest.subgroup_name)
-          }
-        } catch (_) {}
+        if (includeSuggest) {
+          try {
+            const suggest = await expApiFetch('/experiments/meta/suggest-names', {
+              query: { group_name: groupName, date: todayStr() },
+            })
+            if (suggest.subgroup_name && !subs.includes(suggest.subgroup_name)) {
+              subs.push(suggest.subgroup_name)
+            }
+          } catch (_) {}
+        }
       }
-      if (!subs.length) subs = expDistinct.subgroup_name || []
-      fillSelectOptions(subSelect, subs, preferred || subs[0])
+      if (!subs.length && includeSuggest) subs = expDistinct.subgroup_name || []
+      suppressExpSubgroupChange = true
+      fillSelectOptions(subSelect, subs, keep, { lockSelection: true })
+      suppressExpSubgroupChange = false
     }
 
     function applySubgroupDefaultsToForm(data) {
@@ -818,7 +1025,7 @@
         fillOptionalSelect(document.getElementById('expOperator'), options.operator, prefs.operator)
         fillOptionalSelect(document.getElementById('expCamera'), options.camera_device, prefs.camera_device)
         fillOptionalSelect(document.getElementById('expLight'), options.light_device, prefs.light_device)
-        await loadSubgroupOptions(groupSelect.value, prefs.subgroup_name)
+        await loadSubgroupOptions(groupSelect.value, prefs.subgroup_name, { includeSuggest: true })
         document.getElementById('expDate').value = prefs.experiment_date || todayStr()
         if (prefs.illuminance != null && prefs.illuminance !== '') {
           document.getElementById('expIlluminance').value = prefs.illuminance
@@ -859,13 +1066,19 @@
 
     document.getElementById('btnRefreshExpMeta').onclick = () => loadExperimentMeta()
     document.getElementById('expGroupName').addEventListener('change', async () => {
-      await loadSubgroupOptions(document.getElementById('expGroupName').value.trim())
+      const groupName = document.getElementById('expGroupName').value.trim()
+      await loadSubgroupOptions(groupName, getPreferredSubgroup())
       await applyExpSubgroupDefaults()
     })
-    document.getElementById('expSubgroupName').addEventListener('change', applyExpSubgroupDefaults)
+    document.getElementById('expSubgroupName').addEventListener('change', () => {
+      if (suppressExpSubgroupChange) return
+      applyExpSubgroupDefaults()
+    })
     document.getElementById('expSubgroupName').addEventListener('focus', () => {
       const groupName = document.getElementById('expGroupName').value.trim()
-      if (groupName) loadSubgroupOptions(groupName)
+      if (groupName) {
+        loadSubgroupOptions(groupName, getPreferredSubgroup())
+      }
     })
     ;['expOperator', 'expCamera', 'expLight', 'expDate', 'expIlluminance'].forEach((id) => {
       document.getElementById(id).addEventListener('change', saveExpPrefs)
@@ -1004,6 +1217,18 @@
       loadImgFromRel(rel)
     })
 
+    document.getElementById('folderUnmarkedSelect').addEventListener('change', () => {
+      if (suppressFolderSelectChange) return
+      const rel = document.getElementById('folderUnmarkedSelect').value
+      const select = document.getElementById('folderUnmarkedSelect')
+      select.title = rel || select.title
+      if (!rel) return
+      loadImgFromRel(rel)
+    })
+
+    document.getElementById('btnPrevUnmarked').onclick = () => navigateFolderUnmarked(-1)
+    document.getElementById('btnNextUnmarked').onclick = () => navigateFolderUnmarked(1)
+
     document.getElementById('btnCapture').onclick = () => {
       if (!video.videoWidth) return alert('摄像头不可用，请使用选择文件')
       canvas.width = video.videoWidth
@@ -1043,6 +1268,7 @@
       document.getElementById('renameStatus').className = 'rename-status'
       setAnalyzeStatus('')
       resortImgSelect()
+      document.getElementById('folderNav').hidden = true
     }
 
     function paramsFromMetrics(m) {
@@ -1405,6 +1631,7 @@
         btnAnalyze.disabled = !currentBlob
         btnAnalyze.textContent = '重新识别'
         setAnalyzeStatus('')
+        renderFolderUnmarkedSelect(currentImgRel)
       }
     }
 
@@ -1498,10 +1725,7 @@
           throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))
         }
         currentImgRel = data.new_rel
-        activeFolderPrefix = getFolderPrefix(data.new_rel)
-        suppressImgSelectChange = true
-        document.getElementById('imgSelect').value = data.new_rel
-        suppressImgSelectChange = false
+        activeFolderPrefix = getFolderPrefix(oldRel) || getFolderPrefix(data.new_rel)
         updateImgPathHint()
         const lText = data.l_star != null ? `，L*=${Number(data.l_star).toFixed(2)}` : ''
         const mText = data.manual_adjusted ? '，人工调整' : ''
@@ -1509,8 +1733,10 @@
         statusEl.className = 'rename-status ok'
         await loadImgList()
         suppressImgSelectChange = true
-        document.getElementById('imgSelect').value = data.new_rel
+        document.getElementById('imgSelect').value = ''
         suppressImgSelectChange = false
+        resortImgSelect()
+        renderFolderUnmarkedSelect(currentImgRel)
       } catch (err) {
         statusEl.textContent = '标记失败：' + (err.message || err)
         statusEl.className = 'rename-status err'
@@ -1527,18 +1753,15 @@
       stashExperimentContextForImport()
       if (lastRunId) {
         const url = `/experiments/ui?key=${encodeURIComponent(apiKey)}&import_run=${encodeURIComponent(lastRunId)}`
-        openExperimentImport(url)
+        openExperimentImport(url, { importRun: lastRunId })
         return
       }
-      sessionStorage.setItem('exp_import_draft', JSON.stringify({
-        metrics: lastMetrics,
-        source_rel: currentImgRel || null,
-        source_filename: currentImgRel ? currentImgRel.split('/').pop() : null,
-        skip_quality: lastSkipQuality,
-        manual_adjusted: lastManualAdjusted,
-        experiment_context: collectExperimentContext(),
-      }))
-      openExperimentImport(`/experiments/ui?key=${encodeURIComponent(apiKey)}&import_draft=1`)
+      const draft = buildExperimentImportDraft()
+      sessionStorage.setItem('exp_import_draft', JSON.stringify(draft))
+      openExperimentImport(
+        `/experiments/ui?key=${encodeURIComponent(apiKey)}&import_draft=1`,
+        { importDraft: true, draft },
+      )
     }
 
     setupExperimentSync()
