@@ -1214,6 +1214,8 @@
         };
         return map[code] || code || '未知错误';
       }
+
+      function auditSourceLabel(audit) {
         const map = {
           debug_run: 'Debug 运行复制（与调试台一致）',
           reanalysis: '原图重算（算法相同，当前配置）',
