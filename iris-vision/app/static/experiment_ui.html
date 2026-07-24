@@ -92,6 +92,15 @@
   .compare-dialog-body .panel .cap { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #334155; }
   .compare-dialog-body img { max-width: 100%; max-height: 52vh; object-fit: contain; background: #0f172a; border-radius: 8px; border: 1px solid #e5e7eb; }
   .compare-dialog-body .wide img { max-height: 60vh; }
+  .compare-audit {
+    margin-top: 14px; padding: 12px; background: #f8fafc; border: 1px solid #e5e7eb;
+    border-radius: 8px; font-size: 12px; color: #475569; line-height: 1.7;
+  }
+  .compare-audit .title { font-weight: 600; color: #334155; margin-bottom: 8px; }
+  .compare-audit .ok { color: #15803d; }
+  .compare-audit .warn { color: #b45309; }
+  .compare-audit .err { color: #b91c1c; }
+  .compare-audit code { font-family: Consolas, "Courier New", monospace; font-size: 11px; }
   @media (max-width: 640px) {
     .compare-preview, .compare-dialog-body { grid-template-columns: 1fr; }
   }
@@ -472,6 +481,53 @@
         原图：{{ compareDialog.image_rel }}
         <el-button link type="primary" size="small" @click="openImagePreview(compareDialog.image_rel)">打开原图</el-button>
       </div>
+      <div v-if="compareDialog.audit" class="compare-audit">
+        <div class="title">校正审计（已持久化 compare_audit.json）</div>
+        <div>
+          来源：<strong>{{ auditSourceLabel(compareDialog.audit) }}</strong>
+          · 生成于 {{ compareDialog.audit.generated_at || '—' }}
+        </div>
+        <div>
+          巩膜调色：
+          <span :class="compareDialog.audit.sclera_correction_applied ? 'ok' : 'warn'">
+            {{ compareDialog.audit.sclera_correction_applied ? '已应用' : '未应用' }}
+          </span>
+          （{{ compareDialog.audit.sclera_status || '—' }}）
+        </div>
+        <div v-if="compareDialog.audit.color_correction?.gains">
+          RGB 增益 gains =
+          <code>[{{ compareDialog.audit.color_correction.gains.map(g => Number(g).toFixed(3)).join(', ') }}]</code>
+        </div>
+        <div v-if="compareDialog.audit.color_correction?.sclera_lab">
+          采样巩膜 Lab =
+          <code>({{ fmtLabTriple(compareDialog.audit.color_correction.sclera_lab) }})</code>
+          · 目标 L* =
+          <code>{{ compareDialog.audit.standards_at_generation?.sclera_target_l ?? '—' }}</code>
+        </div>
+        <div v-if="compareDialog.audit.standards_at_generation">
+          生成时分档边界 boundaries =
+          <code>{{ (compareDialog.audit.standards_at_generation.grade_boundaries || []).join(', ') }}</code>
+        </div>
+        <div v-if="compareDialog.audit.standards_changed_since_generation" class="warn">
+          注意：当前 grade_thresholds.yaml 与生成快照时的标准不一致，重算结果可能不同。
+        </div>
+        <div v-if="compareDialog.audit.consistency_with_record">
+          与实验记录数值：
+          调色前 Grade {{ consistencyLabel(compareDialog.audit.consistency_with_record.before_grade_match) }}
+          · L* {{ consistencyLabel(compareDialog.audit.consistency_with_record.before_lstar_match) }}
+          ；调色后 Grade {{ consistencyLabel(compareDialog.audit.consistency_with_record.after_grade_match) }}
+          · L* {{ consistencyLabel(compareDialog.audit.consistency_with_record.after_lstar_match) }}
+        </div>
+        <div v-if="compareDialog.audit.manual_adjusted" class="warn">
+          Debug 识别时使用了人工调整环带；原图重算未带入该参数，可能与当时 Debug 略有差异。
+        </div>
+        <div v-if="compareDialog.audit.skip_quality_used" class="warn">
+          重算时已跳过模糊/过曝质量门槛（与 Debug 勾选「跳过质量检测」等效）。
+        </div>
+        <div v-if="compareDialog.audit.source === 'reanalysis'" class="warn">
+          本快照由原图即时重算生成（非 Debug run 复制）。算法与 Debug 相同，但定位/参数以当前配置为准。
+        </div>
+      </div>
     </el-dialog>
 
     <!-- 等级统计 -->
@@ -820,6 +876,7 @@
       const compareDialog = reactive({
         before_url: '', after_url: '', compare_url: '',
         grade_before: '', grade_after: '', lstar_before: null, lstar_after: null, image_rel: '',
+        audit: null,
       });
       const statsDialogVisible = ref(false);
       const statsGroupBy = ref([...DEFAULT_STAT_GROUP_BY]);
@@ -1119,29 +1176,61 @@
       }
 
       async function ensureCompareImages(row) {
-        if (row.image_before_rel && row.image_after_rel) return row;
+        if (row.image_before_rel && row.image_after_rel && row._compare_audit) return row;
         if (!row.id || (!row.image_rel && !row.debug_run_id)) return row;
         compareLoadingId.value = row.id;
         compareLoading.value = true;
         try {
           const data = await apiFetch('/experiments/records/' + row.id + '/ensure-compare-images', { method: 'POST' });
           const idx = allRecords.value.findIndex(r => r.id === row.id);
-          if (idx >= 0) {
-            Object.assign(allRecords.value[idx], {
-              image_before_rel: data.image_before_rel,
-              image_after_rel: data.image_after_rel,
-            });
-            return allRecords.value[idx];
-          }
-          Object.assign(row, {
+          const patch = {
             image_before_rel: data.image_before_rel,
             image_after_rel: data.image_after_rel,
-          });
+            _compare_audit: data.compare_audit || null,
+          };
+          if (idx >= 0) {
+            Object.assign(allRecords.value[idx], patch);
+            return allRecords.value[idx];
+          }
+          Object.assign(row, patch);
           return row;
         } finally {
           compareLoadingId.value = null;
           compareLoading.value = false;
         }
+      }
+
+      function compareErrorLabel(code) {
+        const map = {
+          compare_images_unavailable: '无法生成对比图（识别失败或未检测到有效虹膜）',
+          image_not_found: '原图文件不存在，请检查 image_rel 路径',
+          invalid_image_rel: '图片路径无效',
+          invalid_image_format: '图片文件无法读取',
+          no_image_source: '该记录未关联原图或 Debug 运行',
+          quality_check_failed: '图片未通过质量检测（模糊/过曝）',
+          no_iris_detected: '未检测到虹膜',
+          insufficient_iris_samples: '虹膜有效采样像素不足',
+          no_valid_pixels_after_highlight_removal: '高光剔除后无有效采样像素',
+        };
+        return map[code] || code || '未知错误';
+      }
+        const map = {
+          debug_run: 'Debug 运行复制（与调试台一致）',
+          reanalysis: '原图重算（算法相同，当前配置）',
+          reanalysis_metrics_only: '原图重算审计（图已存在，补写指标）',
+        };
+        return map[audit?.source] || audit?.source || '—';
+      }
+
+      function consistencyLabel(v) {
+        if (v === true) return '一致 ✓';
+        if (v === false) return '不一致 ✗';
+        return '—';
+      }
+
+      function fmtLabTriple(lab) {
+        if (!lab) return '—';
+        return `${lab.L}, ${lab.a}, ${lab.b}`;
       }
 
       function applyPreviewUrls(payload) {
@@ -1159,12 +1248,14 @@
         }
         let target = row;
         try {
-          if (row.id && !(row.image_before_rel && row.image_after_rel)) {
-            ElMessage.info('正在生成调色对比图…');
+          if (row.id && !(row.image_before_rel && row.image_after_rel && row._compare_audit)) {
+            ElMessage.info('正在生成/加载调色对比…');
+            target = await ensureCompareImages(row);
+          } else if (row.id && row.image_before_rel && !row._compare_audit) {
             target = await ensureCompareImages(row);
           }
         } catch (e) {
-          ElMessage.error('生成对比图失败：' + e.message);
+          ElMessage.error('生成对比图失败：' + compareErrorLabel(e.message));
           return;
         }
         const urls = recordCompareUrls(target);
@@ -1176,6 +1267,7 @@
         compareDialog.lstar_before = target.lstar_before;
         compareDialog.lstar_after = target.lstar_after;
         compareDialog.image_rel = target.image_rel || '';
+        compareDialog.audit = target._compare_audit || null;
         compareDialogVisible.value = true;
         if (editingId.value === target.id) setEditPreview(target);
       }
@@ -1437,6 +1529,7 @@
         resetAllFilters, loadMore, onPageSizeChange,
         openImportDialog, importFromRun, openDebugUi, openDebugViewer, openImagePreview,
         canCompare, openCompareDialog, openCompareFromForm, openCompareDialogFromPreview, onPreviewCompareError, onDialogCompareError,
+        auditSourceLabel, consistencyLabel, fmtLabTriple, compareErrorLabel,
       };
     },
   });

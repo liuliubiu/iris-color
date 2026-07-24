@@ -7,12 +7,16 @@ from fastapi import APIRouter, Body, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 
 from app.services.experiment_debug_import import (
+    COMPARE_AUDIT_FILENAME,
+    enrich_audit_with_current_standards,
     enrich_import_payload_urls,
     experiment_snapshot_urls,
     generate_compare_snapshots_from_image_rel,
     list_debug_runs_summary,
+    load_compare_audit,
     load_debug_run_metrics,
     metrics_to_import_payload,
+    rebuild_compare_audit,
     snapshot_compare_images,
 )
 from app.services.experiment_store import ExperimentStore, create_experiment_store
@@ -115,6 +119,8 @@ def _persist_compare_snapshots(config: dict, store: ExperimentStore, record: dic
             snapshot_root,
             record_id,
             run_id,
+            config=config,
+            record=record,
         )
         if paths.get("image_before_rel"):
             return _apply_compare_snapshot_paths(store, record, paths)
@@ -129,11 +135,13 @@ def _persist_compare_snapshots(config: dict, store: ExperimentStore, record: dic
                 image_rel,
                 config,
                 CONFIG_PATH,
+                record=record,
             )
-        except ValueError:
-            return record
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
         if paths.get("image_before_rel"):
             return _apply_compare_snapshot_paths(store, record, paths)
+        raise ValueError("compare_images_unavailable")
 
     return record
 
@@ -148,23 +156,48 @@ def ensure_record_compare_images(
     if not record:
         raise HTTPException(status_code=404, detail="record_not_found")
 
-    if record.get("image_before_rel") and record.get("image_after_rel"):
-        out = dict(record)
-    else:
-        out = _persist_compare_snapshots(config, store, record)
+    snapshot_root = _experiment_snapshot_root(config)
+    try:
+        if record.get("image_before_rel") and record.get("image_after_rel"):
+            out = dict(record)
+        else:
+            out = _persist_compare_snapshots(config, store, record)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if not out.get("image_before_rel"):
-        raise HTTPException(status_code=404, detail="compare_images_unavailable")
+        if not record.get("image_rel") and not record.get("debug_run_id"):
+            raise HTTPException(status_code=422, detail="no_image_source")
+        raise HTTPException(status_code=422, detail="compare_images_unavailable")
+
+    audit = load_compare_audit(snapshot_root, record_id)
+    if not audit:
+        audit = rebuild_compare_audit(
+            snapshot_root=snapshot_root,
+            record_id=record_id,
+            record=out,
+            config=config,
+            config_path=CONFIG_PATH,
+            img_root=IMG_ROOT,
+            debug_output_root=_debug_output_root(config),
+        )
+    if audit:
+        audit = enrich_audit_with_current_standards(audit, config)
 
     urls = experiment_snapshot_urls(
         record_id,
         config.get("experiments", {}).get("api_key", "iris-color-dev"),
     )
-    return {
+    api_key = config.get("experiments", {}).get("api_key", "iris-color-dev")
+    result = {
         **out,
         "thumb_before_url": urls["thumb_before_url"],
         "thumb_after_url": urls["thumb_after_url"],
+        "compare_audit": audit,
     }
+    if audit:
+        result["audit_url"] = f"/experiments/snapshots/{record_id}/{COMPARE_AUDIT_FILENAME}?key={api_key}"
+    return result
 
 
 @router.get("/ui", response_class=HTMLResponse)
@@ -383,11 +416,17 @@ def get_experiment_snapshot(
     filename: str,
     key: str = Query(...),
 ):
-    """读取实验记录持久化的调色前/后快照。"""
+    """读取实验记录持久化的调色前/后快照或审计 JSON。"""
     config = _verify_key(key)
-    if filename not in ("before.jpg", "after.jpg"):
+    allowed = ("before.jpg", "after.jpg", COMPARE_AUDIT_FILENAME)
+    if filename not in allowed:
         raise HTTPException(status_code=400, detail="invalid_snapshot_file")
     path = _experiment_snapshot_root(config) / str(record_id) / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="snapshot_not_found")
+    if filename == COMPARE_AUDIT_FILENAME:
+        audit = load_compare_audit(_experiment_snapshot_root(config), record_id)
+        if not audit:
+            raise HTTPException(status_code=404, detail="audit_not_found")
+        return enrich_audit_with_current_standards(audit, config)
     return FileResponse(path, media_type="image/jpeg")

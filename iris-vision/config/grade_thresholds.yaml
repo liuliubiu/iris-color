@@ -151,6 +151,8 @@ experiments:
   api_key: iris-color-dev
   backend: mysql
   db_path: data/experiment_records.db
+  # 调色对比快照目录（相对 iris-vision/）：before.jpg、after.jpg、compare_audit.json
+  snapshot_dir: data/experiment_snapshots
   mysql:
     host: 127.0.0.1
     port: 3306
