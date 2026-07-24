@@ -328,6 +328,12 @@
       margin: 0 0 8px;
       line-height: 1.4;
     }
+    #imgSelectStatus {
+      min-height: 16px;
+      color: #8b949e;
+      font-size: 11px;
+    }
+    #imgSelectStatus.busy { color: #79c0ff; }
   </style>
 </head>
 <body>
@@ -343,13 +349,13 @@
       <input id="debugKey" type="text" placeholder="iris-color-dev" />
 
       <div class="img-source">
-        <label for="imgSelect">从 img 文件夹选择（可重命名）</label>
+        <label for="imgSelect">从 img 文件夹选择（选中后自动识别）</label>
         <select id="imgSelect">
           <option value="">— 载入列表后选择 —</option>
         </select>
+        <div class="img-path" id="imgSelectStatus"></div>
         <div class="btn-row">
           <button type="button" id="btnLoadImgList">刷新 img 列表</button>
-          <button type="button" id="btnLoadImg" class="primary">载入选中图片</button>
         </div>
         <div class="img-path" id="imgPathHint">未关联 img 文件（本地上传无法重命名）</div>
       </div>
@@ -372,8 +378,8 @@
         跳过质量检测（模糊/过曝，便于测试糊图）
       </label>
 
-      <button type="button" id="btnAnalyze" class="primary" style="width:100%" disabled>
-        开始识别并生成调试图
+      <button type="button" id="btnAnalyze" style="width:100%" disabled>
+        重新识别
       </button>
 
       <div class="experiment-prefs" id="experimentPrefs" hidden>
@@ -491,6 +497,14 @@
     let manualState = null
     let manualImage = new Image()
     let dragMode = null
+    let analyzing = false
+    let suppressImgSelectChange = false
+    let activeFolderPrefix = ''
+    let lastGroupRefresh = 0
+    let experimentWin = null
+
+    const EXP_WIN_NAME = 'iris_experiment_ui'
+    const EXP_SYNC_CHANNEL = 'iris-experiment-sync'
 
     const STAGE_LABELS = {
       '00_original': '原图',
@@ -539,6 +553,180 @@
         `<option value="${String(v).replace(/"/g, '&quot;')}">${v}</option>`
       ).join('')
       if (selected) select.value = selected
+    }
+
+    function getFolderPrefix(rel) {
+      if (!rel) return ''
+      const idx = rel.lastIndexOf('/')
+      return idx >= 0 ? rel.slice(0, idx) : ''
+    }
+
+    function isImgMarked(item) {
+      return item.grade_prefix != null
+    }
+
+    function sortImgListForSelect(items, activeFolder) {
+      return [...items].sort((a, b) => {
+        const aMarked = isImgMarked(a) ? 1 : 0
+        const bMarked = isImgMarked(b) ? 1 : 0
+        if (aMarked !== bMarked) return aMarked - bMarked
+        if (activeFolder && !aMarked) {
+          const aSame = getFolderPrefix(a.rel) === activeFolder ? 0 : 1
+          const bSame = getFolderPrefix(b.rel) === activeFolder ? 0 : 1
+          if (aSame !== bSame) return aSame - bSame
+        }
+        return a.rel.localeCompare(b.rel, 'zh-CN')
+      })
+    }
+
+    function formatImgOption(item) {
+      const grade = item.grade_prefix ? `G${item.grade_prefix}` : ''
+      const lStar = item.l_star_prefix != null ? ` L${Number(item.l_star_prefix).toFixed(1)}` : ''
+      const manual = item.manual_adjusted ? ' M' : ''
+      const tag = grade ? ` [${grade}${lStar}${manual}]` : ''
+      const safeRel = String(item.rel).replace(/"/g, '&quot;')
+      return `<option value="${safeRel}">${item.rel}${tag}</option>`
+    }
+
+    function renderImgSelectOptions(selectedRel) {
+      const select = document.getElementById('imgSelect')
+      const activeFolder = activeFolderPrefix || getFolderPrefix(selectedRel)
+      const sorted = sortImgListForSelect(imgFileList, activeFolder)
+      const groups = { currentUnmarked: [], otherUnmarked: [], marked: [] }
+      for (const item of sorted) {
+        if (isImgMarked(item)) groups.marked.push(item)
+        else if (activeFolder && getFolderPrefix(item.rel) === activeFolder) groups.currentUnmarked.push(item)
+        else groups.otherUnmarked.push(item)
+      }
+      let html = '<option value="">— 选择图片 —</option>'
+      if (groups.currentUnmarked.length) {
+        html += `<optgroup label="当前文件夹 · 未标记">${groups.currentUnmarked.map(formatImgOption).join('')}</optgroup>`
+      }
+      if (groups.otherUnmarked.length) {
+        html += `<optgroup label="其它 · 未标记">${groups.otherUnmarked.map(formatImgOption).join('')}</optgroup>`
+      }
+      if (groups.marked.length) {
+        html += `<optgroup label="已标记">${groups.marked.map(formatImgOption).join('')}</optgroup>`
+      }
+      suppressImgSelectChange = true
+      select.innerHTML = html
+      if (selectedRel) select.value = selectedRel
+      suppressImgSelectChange = false
+    }
+
+    function resortImgSelect() {
+      if (!imgFileList.length) return
+      renderImgSelectOptions(document.getElementById('imgSelect').value || currentImgRel || '')
+    }
+
+    function setAnalyzeStatus(text, busy = false) {
+      const el = document.getElementById('imgSelectStatus')
+      el.textContent = text || ''
+      el.className = busy ? 'busy' : ''
+    }
+
+    function findDistinctMatch(segment, candidates, allowPartial) {
+      const norm = segment.trim().toLowerCase()
+      if (!norm || !candidates?.length) return null
+      for (const c of candidates) {
+        if (c.trim().toLowerCase() === norm) return c
+      }
+      if (!allowPartial) return null
+      for (const c of candidates) {
+        const cn = c.trim().toLowerCase()
+        if (cn.includes(norm) || norm.includes(cn)) return c
+      }
+      return null
+    }
+
+    function inferFieldsFromImagePath(rel) {
+      const segments = rel.split('/').slice(0, -1)
+      let operator = null
+      let camera = null
+      for (const seg of segments) {
+        if (!operator) operator = findDistinctMatch(seg, expDistinct.operator, false)
+        if (!camera) camera = findDistinctMatch(seg, expDistinct.camera_device, true)
+      }
+      return { operator, camera_device: camera }
+    }
+
+    async function applyPathInferredFields(rel) {
+      if (!rel) return
+      await applyExpSubgroupDefaults()
+      const inferred = inferFieldsFromImagePath(rel)
+      if (inferred.operator) document.getElementById('expOperator').value = inferred.operator
+      if (inferred.camera_device) document.getElementById('expCamera').value = inferred.camera_device
+      saveExpPrefs()
+    }
+
+    async function refreshExperimentGroups(opts = {}) {
+      const { advanceSubgroup = false, savedGroup = '', savedSubgroup = '' } = opts
+      const groupSelect = document.getElementById('expGroupName')
+      const currentGroup = groupSelect.value.trim()
+      const currentOperator = document.getElementById('expOperator').value
+      const currentCamera = document.getElementById('expCamera').value
+      const currentLight = document.getElementById('expLight').value
+      try {
+        const options = await expApiFetch('/experiments/meta/options')
+        expDistinct = options
+        let groups = [...(options.group_name || [])]
+        try {
+          const suggest = await expApiFetch('/experiments/meta/suggest-names', { query: { date: todayStr() } })
+          if (suggest.group_name && !groups.includes(suggest.group_name)) groups.push(suggest.group_name)
+        } catch (_) {}
+        fillSelectOptions(groupSelect, groups, currentGroup || groups[0])
+        fillOptionalSelect(document.getElementById('expOperator'), options.operator, currentOperator)
+        fillOptionalSelect(document.getElementById('expCamera'), options.camera_device, currentCamera)
+        fillOptionalSelect(document.getElementById('expLight'), options.light_device, currentLight)
+        const targetGroup = groupSelect.value.trim()
+        let preferredSubgroup = document.getElementById('expSubgroupName').value
+        if (advanceSubgroup && savedGroup && savedGroup === targetGroup && savedSubgroup) {
+          try {
+            const suggest = await expApiFetch('/experiments/meta/suggest-names', {
+              query: { group_name: targetGroup, date: todayStr() },
+            })
+            if (suggest.subgroup_name) preferredSubgroup = suggest.subgroup_name
+          } catch (_) {}
+        }
+        await loadSubgroupOptions(targetGroup, preferredSubgroup)
+        lastGroupRefresh = Date.now()
+      } catch (_) {}
+    }
+
+    function setupExperimentSync() {
+      try {
+        const channel = new BroadcastChannel(EXP_SYNC_CHANNEL)
+        channel.onmessage = (event) => {
+          const data = event.data || {}
+          if (data.type !== 'record_saved') return
+          refreshExperimentGroups({
+            advanceSubgroup: true,
+            savedGroup: data.group_name || '',
+            savedSubgroup: data.subgroup_name || '',
+          })
+        }
+      } catch (_) {}
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible') return
+        if (Date.now() - lastGroupRefresh < 3000) return
+        refreshExperimentGroups()
+      })
+      window.addEventListener('focus', () => {
+        if (Date.now() - lastGroupRefresh < 3000) return
+        refreshExperimentGroups()
+      })
+    }
+
+    function openExperimentImport(url) {
+      const sep = url.includes('?') ? '&' : '?'
+      const fullUrl = `${url}${sep}t=${Date.now()}`
+      if (experimentWin && !experimentWin.closed) {
+        experimentWin.location.href = fullUrl
+        experimentWin.focus()
+      } else {
+        experimentWin = window.open(fullUrl, EXP_WIN_NAME)
+      }
     }
 
     async function expApiFetch(path, opts = {}) {
@@ -639,6 +827,7 @@
         if (prefs.light_device) document.getElementById('expLight').value = prefs.light_device
         await applyExpSubgroupDefaults()
         panel.hidden = false
+        lastGroupRefresh = Date.now()
       } catch (err) {
         if (String(err.message).includes('experiments_disabled')) {
           panel.hidden = true
@@ -673,6 +862,10 @@
       await applyExpSubgroupDefaults()
     })
     document.getElementById('expSubgroupName').addEventListener('change', applyExpSubgroupDefaults)
+    document.getElementById('expSubgroupName').addEventListener('focus', () => {
+      const groupName = document.getElementById('expGroupName').value.trim()
+      if (groupName) loadSubgroupOptions(groupName)
+    })
     ;['expOperator', 'expCamera', 'expLight', 'expDate', 'expIlluminance'].forEach((id) => {
       document.getElementById(id).addEventListener('change', saveExpPrefs)
       document.getElementById(id).addEventListener('input', saveExpPrefs)
@@ -693,15 +886,28 @@
       }
     }
 
-    function setImageBlob(blob, sourceRel = null) {
+    async function setImageBlob(blob, sourceRel = null, { autoAnalyze = true } = {}) {
       currentBlob = blob
       currentImgRel = sourceRel
-      btnAnalyze.disabled = false
+      btnAnalyze.disabled = !blob || analyzing
       preview.src = URL.createObjectURL(blob)
       preview.hidden = false
       video.hidden = true
       updateImgPathHint()
       updateRenameButton()
+      if (sourceRel) {
+        activeFolderPrefix = getFolderPrefix(sourceRel)
+        suppressImgSelectChange = true
+        document.getElementById('imgSelect').value = sourceRel
+        suppressImgSelectChange = false
+        resortImgSelect()
+        await applyPathInferredFields(sourceRel)
+      }
+      document.getElementById('renameStatus').textContent = ''
+      document.getElementById('renameStatus').className = 'rename-status'
+      if (autoAnalyze && blob) {
+        await runAnalyze()
+      }
     }
 
     function updateImgPathHint() {
@@ -757,7 +963,6 @@
 
     async function loadImgList() {
       const apiKey = keyInput.value.trim()
-      const select = document.getElementById('imgSelect')
       try {
         const res = await fetch('/debug/img/list', {
           headers: { 'X-Debug-Key': apiKey },
@@ -765,23 +970,14 @@
         const data = await res.json()
         if (!res.ok) throw new Error(data.detail || res.statusText)
         imgFileList = data.images || []
-        select.innerHTML = '<option value="">— 选择图片 —</option>' + imgFileList.map((item) => {
-          const grade = item.grade_prefix ? `G${item.grade_prefix}` : ''
-          const lStar = item.l_star_prefix != null ? ` L${Number(item.l_star_prefix).toFixed(1)}` : ''
-          const manual = item.manual_adjusted ? ' M' : ''
-          const tag = grade ? ` [${grade}${lStar}${manual}]` : ''
-          return `<option value="${item.rel}">${item.rel}${tag}</option>`
-        }).join('')
+        renderImgSelectOptions(document.getElementById('imgSelect').value || currentImgRel || '')
       } catch (err) {
         alert('载入 img 列表失败：' + (err.message || err))
       }
     }
 
-    document.getElementById('btnLoadImgList').onclick = () => loadImgList()
-
-    document.getElementById('btnLoadImg').onclick = async () => {
-      const rel = document.getElementById('imgSelect').value
-      if (!rel) return alert('请先选择一张图片')
+    async function loadImgFromRel(rel) {
+      if (!rel) return
       const apiKey = keyInput.value.trim()
       try {
         const res = await fetch(`/debug/img/file?rel=${encodeURIComponent(rel)}&key=${encodeURIComponent(apiKey)}`, {
@@ -792,20 +988,29 @@
           throw new Error(data.detail || res.statusText)
         }
         const blob = await res.blob()
-        setImageBlob(blob, rel)
-        document.getElementById('renameStatus').textContent = ''
-        document.getElementById('renameStatus').className = 'rename-status'
+        await setImageBlob(blob, rel)
       } catch (err) {
         alert('载入图片失败：' + (err.message || err))
       }
     }
+
+    document.getElementById('btnLoadImgList').onclick = () => loadImgList()
+
+    document.getElementById('imgSelect').addEventListener('change', () => {
+      if (suppressImgSelectChange) return
+      const rel = document.getElementById('imgSelect').value
+      if (!rel) return
+      loadImgFromRel(rel)
+    })
 
     document.getElementById('btnCapture').onclick = () => {
       if (!video.videoWidth) return alert('摄像头不可用，请使用选择文件')
       canvas.width = video.videoWidth
       canvas.height = video.videoHeight
       canvas.getContext('2d').drawImage(video, 0, 0)
-      canvas.toBlob((blob) => blob && setImageBlob(blob, null), 'image/jpeg', 0.92)
+      canvas.toBlob((blob) => {
+        if (blob) setImageBlob(blob, null)
+      }, 'image/jpeg', 0.92)
     }
 
     document.getElementById('btnUpload').onclick = () => fileInput.click()
@@ -814,11 +1019,6 @@
       if (f) {
         const rel = resolveRelByFilename(f.name)
         setImageBlob(f, rel)
-        if (rel) {
-          document.getElementById('imgSelect').value = rel
-        }
-        document.getElementById('renameStatus').textContent = ''
-        document.getElementById('renameStatus').className = 'rename-status'
       }
       fileInput.value = ''
     }
@@ -826,6 +1026,7 @@
     document.getElementById('btnClear').onclick = () => {
       currentBlob = null
       currentImgRel = null
+      activeFolderPrefix = ''
       lastGrade = null
       lastMetrics = null
       lastManualAdjusted = false
@@ -839,6 +1040,8 @@
       updateRenameButton()
       document.getElementById('renameStatus').textContent = ''
       document.getElementById('renameStatus').className = 'rename-status'
+      setAnalyzeStatus('')
+      resortImgSelect()
     }
 
     function paramsFromMetrics(m) {
@@ -1135,17 +1338,22 @@
       } catch (_) {}
     }
 
-    document.getElementById('btnAnalyze').onclick = async () => {
-      if (!currentBlob) return
+    async function runAnalyze() {
+      if (!currentBlob || analyzing) return
       const apiKey = keyInput.value.trim()
       localStorage.setItem('iris_debug_key', apiKey)
       const skipQ = document.getElementById('skipQuality').checked
+      const imgSelect = document.getElementById('imgSelect')
+
+      analyzing = true
+      imgSelect.disabled = true
+      btnAnalyze.disabled = true
+      btnAnalyze.textContent = '识别中...'
+      setAnalyzeStatus('识别中...', true)
 
       document.getElementById('placeholder').hidden = true
       document.getElementById('errorBox').hidden = true
       document.getElementById('resultContent').hidden = true
-      btnAnalyze.disabled = true
-      btnAnalyze.textContent = '识别中...'
 
       const form = new FormData()
       form.append('file', currentBlob, 'capture.jpg')
@@ -1190,10 +1398,15 @@
         document.getElementById('errorBox').hidden = false
         document.getElementById('errorBox').textContent = String(err.message || err)
       } finally {
-        btnAnalyze.disabled = false
-        btnAnalyze.textContent = '开始识别并生成调试图'
+        analyzing = false
+        imgSelect.disabled = false
+        btnAnalyze.disabled = !currentBlob
+        btnAnalyze.textContent = '重新识别'
+        setAnalyzeStatus('')
       }
     }
+
+    document.getElementById('btnAnalyze').onclick = () => runAnalyze()
 
     document.getElementById('btnManualAnalyze').onclick = async () => {
       if (!currentBlob || !manualState) return
@@ -1282,14 +1495,19 @@
           throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))
         }
         currentImgRel = data.new_rel
+        activeFolderPrefix = getFolderPrefix(data.new_rel)
+        suppressImgSelectChange = true
         document.getElementById('imgSelect').value = data.new_rel
+        suppressImgSelectChange = false
         updateImgPathHint()
         const lText = data.l_star != null ? `，L*=${Number(data.l_star).toFixed(2)}` : ''
         const mText = data.manual_adjusted ? '，人工调整' : ''
         statusEl.textContent = `已标记：${oldRel} → ${data.new_rel}${lText}${mText}（索引已写入 labels/img_labels.json）`
         statusEl.className = 'rename-status ok'
         await loadImgList()
+        suppressImgSelectChange = true
         document.getElementById('imgSelect').value = data.new_rel
+        suppressImgSelectChange = false
       } catch (err) {
         statusEl.textContent = '标记失败：' + (err.message || err)
         statusEl.className = 'rename-status err'
@@ -1306,7 +1524,7 @@
       stashExperimentContextForImport()
       if (lastRunId) {
         const url = `/experiments/ui?key=${encodeURIComponent(apiKey)}&import_run=${encodeURIComponent(lastRunId)}`
-        window.open(url, '_blank')
+        openExperimentImport(url)
         return
       }
       sessionStorage.setItem('exp_import_draft', JSON.stringify({
@@ -1315,9 +1533,10 @@
         source_filename: currentImgRel ? currentImgRel.split('/').pop() : null,
         experiment_context: collectExperimentContext(),
       }))
-      window.open(`/experiments/ui?key=${encodeURIComponent(apiKey)}&import_draft=1`, '_blank')
+      openExperimentImport(`/experiments/ui?key=${encodeURIComponent(apiKey)}&import_draft=1`)
     }
 
+    setupExperimentSync()
     startCamera()
     loadHistory(keyInput.value)
     loadImgList()
