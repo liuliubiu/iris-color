@@ -492,6 +492,7 @@
     let lastRunId = null
     let lastMetrics = null
     let lastManualAdjusted = false
+    let lastSkipQuality = false
     let imgFileList = []
     let mediaStream = null
     let manualState = null
@@ -1343,6 +1344,7 @@
       const apiKey = keyInput.value.trim()
       localStorage.setItem('iris_debug_key', apiKey)
       const skipQ = document.getElementById('skipQuality').checked
+      lastSkipQuality = skipQ
       const imgSelect = document.getElementById('imgSelect')
 
       analyzing = true
@@ -1412,6 +1414,7 @@
       if (!currentBlob || !manualState) return
       const apiKey = keyInput.value.trim()
       const skipQ = document.getElementById('skipQuality').checked
+      lastSkipQuality = skipQ
       const btn = document.getElementById('btnManualAnalyze')
       btn.disabled = true
       btn.textContent = '人工调整识别中...'
@@ -1531,6 +1534,8 @@
         metrics: lastMetrics,
         source_rel: currentImgRel || null,
         source_filename: currentImgRel ? currentImgRel.split('/').pop() : null,
+        skip_quality: lastSkipQuality,
+        manual_adjusted: lastManualAdjusted,
         experiment_context: collectExperimentContext(),
       }))
       openExperimentImport(`/experiments/ui?key=${encodeURIComponent(apiKey)}&import_draft=1`)

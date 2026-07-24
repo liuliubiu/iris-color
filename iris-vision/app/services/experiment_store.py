@@ -100,6 +100,8 @@ CREATE TABLE IF NOT EXISTS experiment_records (
     notes TEXT,
     image_rel TEXT,
     debug_run_id TEXT,
+    skip_quality INTEGER NOT NULL DEFAULT 0,
+    manual_adjusted INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -126,6 +128,8 @@ CREATE TABLE IF NOT EXISTS experiment_records (
     notes TEXT NULL,
     image_rel VARCHAR(512) NULL,
     debug_run_id VARCHAR(32) NULL,
+    skip_quality TINYINT(1) NOT NULL DEFAULT 0,
+    manual_adjusted TINYINT(1) NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
     INDEX idx_exp_group (group_name),
@@ -173,6 +177,10 @@ def _sqlite_migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE experiment_records ADD COLUMN image_before_rel TEXT")
     if "image_after_rel" not in cols:
         conn.execute("ALTER TABLE experiment_records ADD COLUMN image_after_rel TEXT")
+    if "skip_quality" not in cols:
+        conn.execute("ALTER TABLE experiment_records ADD COLUMN skip_quality INTEGER NOT NULL DEFAULT 0")
+    if "manual_adjusted" not in cols:
+        conn.execute("ALTER TABLE experiment_records ADD COLUMN manual_adjusted INTEGER NOT NULL DEFAULT 0")
 
 
 def _mysql_migrate(conn) -> None:
@@ -189,6 +197,12 @@ def _mysql_migrate(conn) -> None:
         cur.execute("SHOW COLUMNS FROM experiment_records LIKE 'image_after_rel'")
         if not cur.fetchone():
             cur.execute("ALTER TABLE experiment_records ADD COLUMN image_after_rel VARCHAR(512) NULL")
+        cur.execute("SHOW COLUMNS FROM experiment_records LIKE 'skip_quality'")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE experiment_records ADD COLUMN skip_quality TINYINT(1) NOT NULL DEFAULT 0")
+        cur.execute("SHOW COLUMNS FROM experiment_records LIKE 'manual_adjusted'")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE experiment_records ADD COLUMN manual_adjusted TINYINT(1) NOT NULL DEFAULT 0")
     conn.commit()
 
 
@@ -274,6 +288,18 @@ class ExperimentStore(ABC):
         if value is not None and not SUBGROUP_CN_RE.match(value) and not SUBGROUP_LEGACY_RE.match(value):
             raise ValueError("invalid_subgroup_name_format")
 
+    @staticmethod
+    def _coerce_bool(value: Any, default: bool = False) -> bool:
+        if value is None or value == "":
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on", "是")
+        return bool(value)
+
     def _normalize_payload(self, data: dict[str, Any]) -> dict[str, Any]:
         out: dict[str, Any] = {}
         out["group_name"] = (data.get("group_name") or "").strip()
@@ -327,6 +353,9 @@ class ExperimentStore(ABC):
                 except (TypeError, ValueError) as exc:
                     raise ValueError(f"invalid_{field}") from exc
 
+        out["skip_quality"] = self._coerce_bool(data.get("skip_quality"), False)
+        out["manual_adjusted"] = self._coerce_bool(data.get("manual_adjusted"), False)
+
         return out
 
 
@@ -348,6 +377,9 @@ class SqliteExperimentStore(ExperimentStore):
         d = {k: row[k] for k in row.keys()}
         if d.get("experiment_date"):
             d["experiment_date"] = str(d["experiment_date"])[:10]
+        for field in ("skip_quality", "manual_adjusted"):
+            if field in d and d[field] is not None:
+                d[field] = bool(d[field])
         return d
 
     def list_records(
@@ -410,8 +442,9 @@ class SqliteExperimentStore(ExperimentStore):
                     group_name, subgroup_name, experiment_date, operator,
                     camera_device, light_device, illuminance, color,
                     grade_before, lstar_before, grade_after, lstar_after,
-                    notes, image_rel, debug_run_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    notes, image_rel, debug_run_id, skip_quality, manual_adjusted,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["group_name"],
@@ -429,6 +462,8 @@ class SqliteExperimentStore(ExperimentStore):
                     payload["notes"],
                     payload["image_rel"],
                     payload["debug_run_id"],
+                    int(payload["skip_quality"]),
+                    int(payload["manual_adjusted"]),
                     now,
                     now,
                 ),
@@ -471,7 +506,8 @@ class SqliteExperimentStore(ExperimentStore):
                     group_name = ?, subgroup_name = ?, experiment_date = ?, operator = ?,
                     camera_device = ?, light_device = ?, illuminance = ?, color = ?,
                     grade_before = ?, lstar_before = ?, grade_after = ?, lstar_after = ?,
-                    notes = ?, image_rel = ?, debug_run_id = ?, updated_at = ?
+                    notes = ?, image_rel = ?, debug_run_id = ?,
+                    skip_quality = ?, manual_adjusted = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -490,6 +526,8 @@ class SqliteExperimentStore(ExperimentStore):
                     payload["notes"],
                     payload["image_rel"],
                     payload["debug_run_id"],
+                    int(payload["skip_quality"]),
+                    int(payload["manual_adjusted"]),
                     now,
                     record_id,
                 ),
@@ -616,6 +654,9 @@ class MysqlExperimentStore(ExperimentStore):
         for k in ("lstar_before", "lstar_after"):
             if out.get(k) is not None:
                 out[k] = round(float(out[k]), 2)
+        for field in ("skip_quality", "manual_adjusted"):
+            if field in out and out[field] is not None:
+                out[field] = bool(out[field])
         return out
 
     def list_records(
@@ -688,8 +729,9 @@ class MysqlExperimentStore(ExperimentStore):
                         group_name, subgroup_name, experiment_date, operator,
                         camera_device, light_device, illuminance, color,
                         grade_before, lstar_before, grade_after, lstar_after,
-                        notes, image_rel, debug_run_id, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        notes, image_rel, debug_run_id, skip_quality, manual_adjusted,
+                        created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         payload["group_name"],
@@ -707,6 +749,8 @@ class MysqlExperimentStore(ExperimentStore):
                         payload["notes"],
                         payload["image_rel"],
                         payload["debug_run_id"],
+                        int(payload["skip_quality"]),
+                        int(payload["manual_adjusted"]),
                         now,
                         now,
                     ),
@@ -765,7 +809,8 @@ class MysqlExperimentStore(ExperimentStore):
                         group_name = %s, subgroup_name = %s, experiment_date = %s, operator = %s,
                         camera_device = %s, light_device = %s, illuminance = %s, color = %s,
                         grade_before = %s, lstar_before = %s, grade_after = %s, lstar_after = %s,
-                        notes = %s, image_rel = %s, debug_run_id = %s, updated_at = %s
+                        notes = %s, image_rel = %s, debug_run_id = %s,
+                        skip_quality = %s, manual_adjusted = %s, updated_at = %s
                     WHERE id = %s
                     """,
                     (
@@ -784,6 +829,8 @@ class MysqlExperimentStore(ExperimentStore):
                         payload["notes"],
                         payload["image_rel"],
                         payload["debug_run_id"],
+                        int(payload["skip_quality"]),
+                        int(payload["manual_adjusted"]),
                         now,
                         record_id,
                     ),

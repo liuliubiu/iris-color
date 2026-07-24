@@ -499,6 +499,7 @@ def metrics_to_import_payload(metrics: dict, run_id: Optional[str] = None) -> di
         "compare_url": urls.get("compare_url"),
         "viewer_url": viewer_url,
         "manual_adjusted": bool(metrics.get("manual_adjusted")),
+        "skip_quality": bool(metrics.get("skip_quality")),
         "detection_method": metrics.get("detection_method"),
         "summary": _build_summary(before, after, source_rel, run_id),
     }

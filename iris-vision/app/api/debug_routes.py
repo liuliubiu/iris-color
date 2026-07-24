@@ -225,6 +225,7 @@ def _build_debug_response(
     include_base64: bool,
     source_rel: Optional[str] = None,
     source_filename: Optional[str] = None,
+    skip_quality: bool = False,
 ) -> DebugAnalysisResponse:
     debug_cfg = config.get("debug", {})
     highlight_v = config.get("highlight_v_threshold", 240)
@@ -244,6 +245,7 @@ def _build_debug_response(
     if source_filename:
         metrics["source_filename"] = source_filename
         metrics["original_filename"] = source_filename
+    metrics["skip_quality"] = bool(skip_quality)
 
     run_id = None
     saved_dir = None
@@ -330,6 +332,7 @@ async def analyze_debug(
     return _build_debug_response(
         image_bgr, config, pipeline, include_base64=include_base64,
         source_rel=source_rel, source_filename=file.filename,
+        skip_quality=skip_quality,
     )
 
 
@@ -376,6 +379,7 @@ async def analyze_debug_manual(
     return _build_debug_response(
         image_bgr, config, pipeline, include_base64=include_base64,
         source_rel=source_rel, source_filename=file.filename,
+        skip_quality=skip_quality,
     )
 
 

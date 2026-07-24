@@ -279,6 +279,24 @@
               <template v-slot="scope"><span class="lstar-val">{{ fmtLstar(scope.row.lstar_after) }}</span></template>
             </el-table-column>
 
+            <el-table-column prop="skip_quality" min-width="108" align="center">
+              <template v-slot:header>
+                <exp-filter-header title="跳过质量检测" field="skip_quality" :fixed-options="boolOptions"
+                  :current-sort="sortState" :column-filters="columnFilters" :all-records="allRecords"
+                  @sort-change="onHeaderSort" @filter-change="onHeaderFilter" />
+              </template>
+              <template v-slot="scope"><span>{{ fmtBool(scope.row.skip_quality) }}</span></template>
+            </el-table-column>
+
+            <el-table-column prop="manual_adjusted" min-width="108" align="center">
+              <template v-slot:header>
+                <exp-filter-header title="人工调整识别" field="manual_adjusted" :fixed-options="boolOptions"
+                  :current-sort="sortState" :column-filters="columnFilters" :all-records="allRecords"
+                  @sort-change="onHeaderSort" @filter-change="onHeaderFilter" />
+              </template>
+              <template v-slot="scope"><span>{{ fmtBool(scope.row.manual_adjusted) }}</span></template>
+            </el-table-column>
+
             <el-table-column prop="notes" min-width="100" show-overflow-tooltip>
               <template v-slot:header>
                 <exp-filter-header title="备注" field="notes"
@@ -425,6 +443,13 @@
         </el-form-item>
         <el-form-item label="L*">
           <el-input-number v-model="form.lstar_after" :step="0.01" :precision="2" controls-position="right" style="width:100%" />
+        </el-form-item>
+        <div class="form-section-title">识别选项</div>
+        <el-form-item label="跳过质量检测">
+          <el-switch v-model="form.skip_quality" active-text="是" inactive-text="否" />
+        </el-form-item>
+        <el-form-item label="人工调整识别">
+          <el-switch v-model="form.manual_adjusted" active-text="是" inactive-text="否" />
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="form.notes" type="textarea" :rows="2" maxlength="500" show-word-limit />
@@ -606,6 +631,13 @@
   const EMPTY_MARK = '__EMPTY__';
   const NUM_FIELDS = new Set(['id', 'illuminance', 'lstar_before', 'lstar_after']);
   const GRADE_FIELDS = new Set(['grade_before', 'grade_after']);
+  const BOOL_FIELDS = new Set(['skip_quality', 'manual_adjusted']);
+
+  function displayFilterValue(row, field) {
+    const val = row[field];
+    if (BOOL_FIELDS.has(field)) return val ? '是' : '否';
+    return (val === null || val === undefined || val === '') ? EMPTY_MARK : String(val);
+  }
   const DEFAULT_SORT = { prop: 'id', order: 'descending' };
   const STAT_DIM_OPTIONS = [
     { field: 'group_name', label: '实验大组' },
@@ -671,6 +703,9 @@
       const gb = parseInt(String(vb).replace(/\D/g, ''), 10) || 0;
       return ga - gb;
     }
+    if (BOOL_FIELDS.has(prop)) {
+      return Number(!!va) - Number(!!vb);
+    }
     if (prop === 'experiment_date') {
       return String(va).localeCompare(String(vb));
     }
@@ -704,9 +739,7 @@
       const isDesc = computed(() => props.currentSort?.prop === props.field && props.currentSort?.order === 'descending');
 
       function cellVal(row) {
-        const v = row[props.field];
-        if (v === null || v === undefined || v === '') return EMPTY_MARK;
-        return String(v);
+        return displayFilterValue(row, props.field);
       }
 
       function recordsForOptions() {
@@ -714,9 +747,7 @@
         return (props.allRecords || []).filter(row => {
           for (const [key, f] of Object.entries(filters)) {
             if (key === props.field || !f?.selected?.length) continue;
-            const val = row[key];
-            const s = (val === null || val === undefined || val === '') ? EMPTY_MARK : String(val);
-            if (!f.selected.includes(s)) return false;
+            if (!f.selected.includes(displayFilterValue(row, key))) return false;
           }
           return true;
         });
@@ -842,6 +873,7 @@
     return {
       group_name:'', subgroup_name:'', experiment_date:todayStr(), operator:'', camera_device:'', light_device:'',
       illuminance:undefined, color:'', grade_before:'', lstar_before:undefined, grade_after:'', lstar_after:undefined,
+      skip_quality:false, manual_adjusted:false,
       notes:'', image_rel:'', debug_run_id:'',
     };
   }
@@ -894,6 +926,7 @@
 
       const gradeOptions = GRADES;
       const colorOptions = COLORS;
+      const boolOptions = ['是', '否'];
       const blueColors = ['浅蓝','蓝','深蓝'];
       const greenColors = ['浅绿','绿','深绿'];
       const brownColors = ['浅棕','棕','深棕'];
@@ -932,8 +965,7 @@
 
       function rowMatchesFilters(row) {
         for (const [field, f] of Object.entries(columnFilters)) {
-          const val = row[field];
-          const s = (val === null || val === undefined || val === '') ? EMPTY_MARK : String(val);
+          const s = displayFilterValue(row, field);
           if (f?.selected?.length && !f.selected.includes(s)) return false;
           if (f?.keyword && String(f.keyword).trim()) {
             const label = s === EMPTY_MARK ? '' : s;
@@ -1341,6 +1373,8 @@
         form.color = payload.color || '';
         form.image_rel = payload.image_rel || '';
         form.debug_run_id = payload.debug_run_id || '';
+        form.skip_quality = !!payload.skip_quality;
+        form.manual_adjusted = !!payload.manual_adjusted;
         applyPreviewUrls(payload);
         const noteLine = payload.summary || '';
         const tag = payload.debug_run_id || (payload.image_rel ? 'session' : '');
@@ -1454,7 +1488,9 @@
           operator: row.operator||'', camera_device: row.camera_device||'', light_device: row.light_device||'',
           illuminance: row.illuminance??undefined, color: row.color||'',
           grade_before: row.grade_before||'', lstar_before: row.lstar_before??undefined,
-          grade_after: row.grade_after||'', lstar_after: row.lstar_after??undefined, notes: row.notes||'',
+          grade_after: row.grade_after||'', lstar_after: row.lstar_after??undefined,
+          skip_quality: !!row.skip_quality, manual_adjusted: !!row.manual_adjusted,
+          notes: row.notes||'',
           image_rel: row.image_rel||'', debug_run_id: row.debug_run_id||'',
         });
         setEditPreview(row);
@@ -1469,6 +1505,8 @@
         if (!payload.subgroup_name) payload.subgroup_name = null;
         else payload.subgroup_name = String(payload.subgroup_name).trim();
         ['illuminance','lstar_before','lstar_after'].forEach(k => { if (payload[k] === undefined) payload[k] = null; });
+        payload.skip_quality = !!payload.skip_quality;
+        payload.manual_adjusted = !!payload.manual_adjusted;
         try {
           const isEdit = !!editingId.value;
           if (isEdit) {
@@ -1515,6 +1553,7 @@
 
       function onSelectionChange(rows) { selectedIds.value = rows.map(r => r.id); }
       function fmtLstar(v) { return v == null || v === '' ? '—' : Number(v).toFixed(2); }
+      function fmtBool(v) { return v ? '是' : '否'; }
 
       watch(globalSearch, () => { displayLimit.value = pageSize.value; });
 
@@ -1527,7 +1566,7 @@
         libsReady, apiKey, allRecords, loading, saving, selectedIds, drawerVisible, drawerTitle,
         form, formRef, tableRef, formRules, distinct, globalSearch, columnFilters, sortState,
         pageSize, displayLimit, filteredRecords, pagedRecords, canLoadMore, hasActiveFilters, hasActiveSort,
-        gradeOptions, colorOptions, blueColors, greenColors, brownColors,
+        gradeOptions, colorOptions, boolOptions, blueColors, greenColors, brownColors,
         importDialogVisible, importLoading, debugRuns, importPreview, debugUiUrl,
         compareDialogVisible, compareDialog, compareLoading, compareLoadingId, formRowForCompare,
         statsDialogVisible, statsGroupBy, statsRows, statsTotals, statDimOptions, activeStatDims,
@@ -1535,7 +1574,7 @@
         openGradeStats, refreshGradeStats, gradeShort, gradeCountSum, formatStatDim,
         suggestOperator, suggestCamera, suggestLight, suggestColor, suggestGrade,
         suggestGroupName, suggestSubgroupName, onGroupSubgroupChange,
-        onSelectionChange, fmtLstar, onHeaderSort, onHeaderFilter,
+        onSelectionChange, fmtLstar, fmtBool, onHeaderSort, onHeaderFilter,
         resetAllFilters, loadMore, onPageSizeChange,
         openImportDialog, importFromRun, openDebugUi, openDebugViewer, openImagePreview,
         canCompare, openCompareDialog, openCompareFromForm, openCompareDialogFromPreview, onPreviewCompareError, onDialogCompareError,

@@ -375,6 +375,10 @@ def import_from_metrics(key: str = Query(...), body: dict = Body(...)):
     if source_filename:
         merged["source_filename"] = source_filename
         merged["original_filename"] = source_filename
+    if "skip_quality" in body:
+        merged["skip_quality"] = bool(body.get("skip_quality"))
+    if "manual_adjusted" in body:
+        merged["manual_adjusted"] = bool(body.get("manual_adjusted"))
     payload = metrics_to_import_payload(merged, run_id or None)
     dbg_key = _debug_api_key(config)
     return enrich_import_payload_urls(payload, dbg_key)
