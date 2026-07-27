@@ -463,6 +463,9 @@ def stability_stats(
     group_names = body.get("group_names")
     if group_names is not None and not isinstance(group_names, list):
         raise HTTPException(status_code=400, detail="invalid_group_names")
+    subgroup_names = body.get("subgroup_names")
+    if subgroup_names is not None and not isinstance(subgroup_names, list):
+        raise HTTPException(status_code=400, detail="invalid_subgroup_names")
     record_ids = body.get("record_ids")
     if record_ids is not None:
         if not isinstance(record_ids, list):
@@ -503,6 +506,7 @@ def stability_stats(
         min_subgroup_n=min_subgroup_n,
         operators=operators or None,
         group_names=group_names or None,
+        subgroup_names=subgroup_names or None,
         record_ids=record_ids or None,
     )
     report["source_count"] = len(records)

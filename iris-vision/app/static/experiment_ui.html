@@ -129,6 +129,7 @@
     border-radius: 6px; font-size: 12px; color: #166534; line-height: 1.7;
   }
   .stability-chart { width: 100%; height: 360px; min-height: 280px; }
+  .stability-chart.tall { height: 440px; }
   .stability-chart-sm { height: 260px; }
   .stability-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-bottom: 12px; }
   .stability-card {
@@ -137,6 +138,10 @@
   .stability-card .label { font-size: 11px; color: #64748b; margin-bottom: 4px; }
   .stability-card .value { font-size: 18px; font-weight: 600; color: #1e293b; font-family: Consolas, monospace; }
   .stability-card .sub { font-size: 11px; color: #94a3b8; margin-top: 2px; }
+  .stats-chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  .stats-chart { width: 100%; height: 260px; }
+  .stats-pct { font-size: 11px; color: #64748b; }
+  .scatter-hint { font-size: 12px; color: #64748b; margin-bottom: 8px; line-height: 1.6; }
 </style>
 </head>
 <body>
@@ -577,89 +582,146 @@
     </el-dialog>
 
     <!-- 等级统计 -->
-    <el-dialog v-model="statsDialogVisible" title="调色前 / 调色后等级统计" width="960px" top="4vh" destroy-on-close>
-      <div class="stats-toolbar">
-        <span style="font-size:13px;color:#475569">分组维度：</span>
-        <el-checkbox-group v-model="statsGroupBy" @change="refreshGradeStats">
-          <el-checkbox v-for="dim in statDimOptions" :key="dim.field" :label="dim.field">{{ dim.label }}</el-checkbox>
-        </el-checkbox-group>
-        <span class="hint">基于当前表格筛选结果，共 {{ filteredRecords.length }} 条记录</span>
-      </div>
-      <div class="stats-table-wrap">
-        <el-table :data="statsRows" border stripe size="small" empty-text="无数据或未选择分组维度" max-height="520">
-          <el-table-column
-            v-for="dim in activeStatDims"
-            :key="dim.field"
-            :prop="dim.field"
-            :label="dim.label"
-            min-width="108"
-            show-overflow-tooltip
-          >
-            <template v-slot="scope">{{ formatStatDim(scope.row[dim.field]) }}</template>
-          </el-table-column>
-          <el-table-column label="调色前" align="center">
-            <el-table-column v-for="g in gradeOptions" :key="'b-' + g" :label="gradeShort(g)" width="54" align="center">
-              <template v-slot="scope">
-                <span class="stats-num" :class="{ zero: !scope.row.before[g] }">{{ scope.row.before[g] || 0 }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="计" width="54" align="center">
-              <template v-slot="scope"><span class="stats-num">{{ gradeCountSum(scope.row.before) }}</span></template>
-            </el-table-column>
-          </el-table-column>
-          <el-table-column label="调色后" align="center">
-            <el-table-column v-for="g in gradeOptions" :key="'a-' + g" :label="gradeShort(g)" width="54" align="center">
-              <template v-slot="scope">
-                <span class="stats-num" :class="{ zero: !scope.row.after[g] }">{{ scope.row.after[g] || 0 }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="计" width="54" align="center">
-              <template v-slot="scope"><span class="stats-num">{{ gradeCountSum(scope.row.after) }}</span></template>
-            </el-table-column>
-          </el-table-column>
-          <el-table-column label="记录数" prop="total" width="72" align="center" />
-        </el-table>
-      </div>
-      <div v-if="statsTotals.total" class="stats-summary">
-        <strong>合计</strong>（{{ statsTotals.total }} 条）：
-        调色前 —
-        <span v-for="g in gradeOptions" :key="'ts-b-' + g">{{ gradeShort(g) }} {{ statsTotals.before[g] || 0 }}</span>；
-        调色后 —
-        <span v-for="g in gradeOptions" :key="'ts-a-' + g">{{ gradeShort(g) }} {{ statsTotals.after[g] || 0 }}</span>
-      </div>
+    <el-dialog v-model="statsDialogVisible" title="调色前 / 调色后等级统计" width="960px" top="4vh" destroy-on-close @opened="onStatsDialogOpened">
+      <el-tabs v-model="statsMainTab" @tab-change="onStatsTabChange">
+        <el-tab-pane label="数量统计" name="count">
+          <div class="stats-toolbar">
+            <span style="font-size:13px;color:#475569">分组维度：</span>
+            <el-checkbox-group v-model="statsGroupBy" @change="refreshGradeStats">
+              <el-checkbox v-for="dim in statDimOptions" :key="dim.field" :label="dim.field">{{ dim.label }}</el-checkbox>
+            </el-checkbox-group>
+            <span class="hint">基于当前表格筛选，共 {{ filteredRecords.length }} 条</span>
+          </div>
+          <div class="stats-table-wrap">
+            <el-table :data="statsRows" border stripe size="small" empty-text="无数据或未选择分组维度" max-height="420">
+              <el-table-column
+                v-for="dim in activeStatDims"
+                :key="dim.field"
+                :prop="dim.field"
+                :label="dim.label"
+                min-width="108"
+                show-overflow-tooltip
+              >
+                <template v-slot="scope">{{ formatStatDim(scope.row[dim.field]) }}</template>
+              </el-table-column>
+              <el-table-column label="调色前" align="center">
+                <el-table-column v-for="g in gradeOptions" :key="'b-' + g" :label="gradeShort(g)" width="54" align="center">
+                  <template v-slot="scope">
+                    <span class="stats-num" :class="{ zero: !scope.row.before[g] }">{{ scope.row.before[g] || 0 }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="计" width="54" align="center">
+                  <template v-slot="scope"><span class="stats-num">{{ gradeCountSum(scope.row.before) }}</span></template>
+                </el-table-column>
+              </el-table-column>
+              <el-table-column label="调色后" align="center">
+                <el-table-column v-for="g in gradeOptions" :key="'a-' + g" :label="gradeShort(g)" width="54" align="center">
+                  <template v-slot="scope">
+                    <span class="stats-num" :class="{ zero: !scope.row.after[g] }">{{ scope.row.after[g] || 0 }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="计" width="54" align="center">
+                  <template v-slot="scope"><span class="stats-num">{{ gradeCountSum(scope.row.after) }}</span></template>
+                </el-table-column>
+              </el-table-column>
+              <el-table-column label="记录数" prop="total" width="72" align="center" />
+            </el-table>
+          </div>
+          <div v-if="statsTotals.total" class="stats-summary">
+            <strong>合计</strong>（{{ statsTotals.total }} 条）：
+            调色前 —
+            <span v-for="g in gradeOptions" :key="'ts-b-' + g">{{ gradeShort(g) }} {{ statsTotals.before[g] || 0 }}</span>；
+            调色后 —
+            <span v-for="g in gradeOptions" :key="'ts-a-' + g">{{ gradeShort(g) }} {{ statsTotals.after[g] || 0 }}</span>
+          </div>
+        </el-tab-pane>
+        <el-tab-pane label="Grade 占比" name="pct">
+          <div class="stats-toolbar">
+            <span style="font-size:12px;color:#475569">实验人：</span>
+            <el-select v-model="statsPctOperators" multiple collapse-tags collapse-tags-tooltip placeholder="全部" size="small" style="width:140px" clearable>
+              <el-option v-for="op in statsPctOperatorOptions" :key="op" :label="op" :value="op" />
+            </el-select>
+            <span style="font-size:12px;color:#475569">实验大组：</span>
+            <el-select v-model="statsPctGroups" multiple collapse-tags collapse-tags-tooltip placeholder="全部" size="small" style="width:140px" clearable @change="onStatsPctGroupChange">
+              <el-option v-for="g in statsPctGroupOptions" :key="g" :label="g" :value="g" />
+            </el-select>
+            <span style="font-size:12px;color:#475569">实验小组：</span>
+            <el-select v-model="statsPctSubgroups" multiple collapse-tags collapse-tags-tooltip placeholder="全部" size="small" style="width:140px" clearable>
+              <el-option v-for="s in statsPctSubgroupOptions" :key="s" :label="s" :value="s" />
+            </el-select>
+            <el-checkbox v-model="statsPctByOperator">按实验人分行</el-checkbox>
+            <el-button type="primary" size="small" @click="refreshGradePctStats">重新计算</el-button>
+            <span class="hint">统计全库记录，可按实验人 / 大组 / 小组筛选占比</span>
+          </div>
+          <div class="stats-table-wrap">
+            <el-table :data="statsPctRows" border stripe size="small" empty-text="请设置筛选条件后点击重新计算" max-height="280">
+              <el-table-column prop="label" label="统计范围" min-width="160" show-overflow-tooltip />
+              <el-table-column prop="total" label="记录数" width="72" align="center" />
+              <el-table-column label="调色前占比" align="center">
+                <el-table-column v-for="g in gradeOptions" :key="'pb-' + g" :label="gradeShort(g)" width="64" align="center">
+                  <template v-slot="scope">
+                    <span class="stats-num" :class="{ zero: !scope.row.before[g] }">{{ formatGradePctOnly(scope.row.before, g) }}</span>
+                  </template>
+                </el-table-column>
+              </el-table-column>
+              <el-table-column label="调色后占比" align="center">
+                <el-table-column v-for="g in gradeOptions" :key="'pa-' + g" :label="gradeShort(g)" width="64" align="center">
+                  <template v-slot="scope">
+                    <span class="stats-num" :class="{ zero: !scope.row.after[g] }">{{ formatGradePctOnly(scope.row.after, g) }}</span>
+                  </template>
+                </el-table-column>
+              </el-table-column>
+            </el-table>
+          </div>
+          <div v-if="statsPctTotals.total" class="stats-chart-row">
+            <div ref="chartGradeBeforeRef" class="stats-chart"></div>
+            <div ref="chartGradeAfterRef" class="stats-chart"></div>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
     </el-dialog>
 
     <!-- L* 稳定性统计 -->
-    <el-dialog v-model="stabilityDialogVisible" title="L* 离散度稳定性分析" width="980px" top="3vh" destroy-on-close @opened="onStabilityDialogOpened">
+    <el-dialog v-model="stabilityDialogVisible" title="L* 稳定性分析" width="980px" top="3vh" destroy-on-close @opened="onStabilityDialogOpened">
       <div class="stability-toolbar">
-        <el-checkbox v-model="stabilityUseTableFilter">沿用当前表格筛选</el-checkbox>
-        <el-checkbox v-model="stabilityUseSelection" :disabled="!selectedIds.length">
-          仅统计已勾选 ({{ selectedIds.length }})
-        </el-checkbox>
-        <span style="font-size:12px;color:#475569">小组最少 n：</span>
-        <el-input-number v-model="stabilityMinN" :min="2" :max="20" size="small" style="width:100px" />
         <span style="font-size:12px;color:#475569">实验人：</span>
-        <el-select v-model="stabilityOperators" multiple collapse-tags collapse-tags-tooltip placeholder="全部" size="small" style="width:160px" clearable>
+        <el-select v-model="stabilityOperators" multiple collapse-tags collapse-tags-tooltip placeholder="全部" size="small" style="width:150px" clearable>
           <el-option v-for="op in stabilityOperatorOptions" :key="op" :label="op" :value="op" />
         </el-select>
-        <span style="font-size:12px;color:#475569">大组：</span>
-        <el-select v-model="stabilityGroups" multiple collapse-tags collapse-tags-tooltip placeholder="全部" size="small" style="width:160px" clearable>
+        <span style="font-size:12px;color:#475569">实验大组：</span>
+        <el-select v-model="stabilityGroups" multiple collapse-tags collapse-tags-tooltip placeholder="全部" size="small" style="width:150px" clearable @change="onStabilityGroupChange">
           <el-option v-for="g in stabilityGroupOptions" :key="g" :label="g" :value="g" />
         </el-select>
+        <span style="font-size:12px;color:#475569">实验小组：</span>
+        <el-select v-model="stabilitySubgroups" multiple collapse-tags collapse-tags-tooltip placeholder="全部" size="small" style="width:150px" clearable>
+          <el-option v-for="s in stabilitySubgroupOptions" :key="s" :label="s" :value="s" />
+        </el-select>
+        <span style="font-size:12px;color:#475569">小组最少 n：</span>
+        <el-input-number v-model="stabilityMinN" :min="2" :max="20" size="small" style="width:88px" />
         <el-button type="primary" size="small" :loading="stabilityLoading" @click="refreshStabilityStats">重新计算</el-button>
-        <span class="hint">对比巩膜调色前后 L* 标准差 σ、极差与跨条件一致性；grade 边界 {{ (stabilityReport.boundaries || []).join(', ') }}</span>
+        <span class="hint">统计全库记录，可按实验人 / 大组 / 小组筛选；grade 边界 {{ (stabilityReport.boundaries || []).join(', ') }}</span>
       </div>
-      <div v-if="stabilityReport.total != null" class="stability-summary">
-        有效记录 <strong>{{ stabilityReport.total }}</strong> 条
-        <span v-if="stabilityReport.filtered_count != null && stabilityReport.source_count != null">
-          （筛选前 {{ stabilityReport.filtered_count }} / 库内 {{ stabilityReport.source_count }}）
-        </span>
+      <div v-if="stabilityScatterSummary.n" class="stability-summary">
+        有效记录 <strong>{{ stabilityScatterSummary.n }}</strong> 条
+        · 调色前 σ = <strong>{{ stabilityScatterSummary.stdBefore }}</strong>
+        → 调色后 σ = <strong>{{ stabilityScatterSummary.stdAfter }}</strong>
+        <span v-if="stabilityScatterSummary.stdAfter < stabilityScatterSummary.stdBefore">（更集中）</span>
+        <span v-else-if="stabilityScatterSummary.stdAfter > stabilityScatterSummary.stdBefore">（更分散）</span>
         <template v-if="stabilityReport.within_subgroup && stabilityReport.within_subgroup.median_std_before != null">
-          · 小组内 σ 中位数：调色前 {{ stabilityReport.within_subgroup.median_std_before }} → 调色后 {{ stabilityReport.within_subgroup.median_std_after }}
-          （更稳 {{ stabilityReport.within_subgroup.wins }} / 更散 {{ stabilityReport.within_subgroup.losses }}，p={{ stabilityReport.within_subgroup.p_sign }}）
+          · 小组内 σ 中位数 {{ stabilityReport.within_subgroup.median_std_before }} → {{ stabilityReport.within_subgroup.median_std_after }}
         </template>
       </div>
       <el-tabs v-model="stabilityTab" @tab-change="renderStabilityCharts">
+        <el-tab-pane label="L* 密集度" name="scatter">
+          <div class="scatter-hint">
+            上图：同一批记录在 L* 轴上的分布直方图（峰越窄越高表示该阶段 L* 越集中）；
+            下图：调色前 / 调色后所有 L* 值的散点分布（纵向越集中表示离散度越低）。σ 见顶部摘要。
+          </div>
+          <div ref="chartScatterRef" class="stability-chart tall" v-loading="stabilityLoading"></div>
+          <div v-if="!stabilityScatterSummary.n && !stabilityLoading" style="text-align:center;color:#909399;font-size:13px;padding:8px">
+            当前筛选范围内无有效 L* 记录，请调整实验人 / 组别后重新计算
+          </div>
+        </el-tab-pane>
         <el-tab-pane label="小组内重复性" name="within">
           <div ref="chartWithinRef" class="stability-chart" v-loading="stabilityLoading"></div>
           <div v-if="!(stabilityReport.within_subgroup && stabilityReport.within_subgroup.groups && stabilityReport.within_subgroup.groups.length)" style="text-align:center;color:#909399;font-size:13px;padding:8px">
@@ -1004,22 +1066,32 @@
         audit: null,
       });
       const statsDialogVisible = ref(false);
+      const statsMainTab = ref('count');
       const statsGroupBy = ref([...DEFAULT_STAT_GROUP_BY]);
       const statsRows = ref([]);
       const statsTotals = reactive({ total: 0, before: emptyGradeCounts(), after: emptyGradeCounts() });
+      const statsPctOperators = ref([]);
+      const statsPctGroups = ref([]);
+      const statsPctSubgroups = ref([]);
+      const statsPctByOperator = ref(false);
+      const statsPctRows = ref([]);
+      const statsPctTotals = reactive({ total: 0, before: emptyGradeCounts(), after: emptyGradeCounts() });
       const stabilityDialogVisible = ref(false);
       const stabilityLoading = ref(false);
       const stabilityMinN = ref(3);
-      const stabilityUseTableFilter = ref(true);
-      const stabilityUseSelection = ref(false);
       const stabilityOperators = ref([]);
       const stabilityGroups = ref([]);
-      const stabilityTab = ref('within');
+      const stabilitySubgroups = ref([]);
+      const stabilityTab = ref('scatter');
       const stabilityReport = reactive({});
+      const stabilityScatterSummary = reactive({ n: 0, stdBefore: '—', stdAfter: '—' });
+      const chartScatterRef = ref(null);
       const chartWithinRef = ref(null);
       const chartPersonRef = ref(null);
       const chartCrossRef = ref(null);
       const chartBoundaryRef = ref(null);
+      const chartGradeBeforeRef = ref(null);
+      const chartGradeAfterRef = ref(null);
       const chartInstances = {};
       let skipSubgroupDefaults = false;
 
@@ -1029,13 +1101,34 @@
       );
 
       const stabilityOperatorOptions = computed(() =>
-        [...new Set((stabilityUseTableFilter.value ? filteredRecords.value : allRecords.value)
-          .map(r => r.operator).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+        [...new Set(allRecords.value.map(r => r.operator).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
       );
       const stabilityGroupOptions = computed(() =>
-        [...new Set((stabilityUseTableFilter.value ? filteredRecords.value : allRecords.value)
-          .map(r => r.group_name).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+        [...new Set(allRecords.value.map(r => r.group_name).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
       );
+      const stabilitySubgroupOptions = computed(() => {
+        let src = allRecords.value;
+        if (stabilityGroups.value.length) {
+          const set = new Set(stabilityGroups.value);
+          src = src.filter(r => set.has(r.group_name));
+        }
+        return [...new Set(src.map(r => r.subgroup_name).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+      });
+
+      const statsPctOperatorOptions = computed(() =>
+        [...new Set(allRecords.value.map(r => r.operator).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      );
+      const statsPctGroupOptions = computed(() =>
+        [...new Set(allRecords.value.map(r => r.group_name).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      );
+      const statsPctSubgroupOptions = computed(() => {
+        let src = allRecords.value;
+        if (statsPctGroups.value.length) {
+          const set = new Set(statsPctGroups.value);
+          src = src.filter(r => set.has(r.group_name));
+        }
+        return [...new Set(src.map(r => r.subgroup_name).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+      });
 
       const debugUiUrl = computed(() => '/debug/ui?key=' + encodeURIComponent(apiKey.value));
 
@@ -1143,6 +1236,33 @@
         return val == null || val === '' ? '—' : val;
       }
 
+      function gradePct(counts, grade) {
+        const n = counts[grade] || 0;
+        const total = gradeCountSum(counts);
+        if (!total || !n) return '0.0%';
+        return (100 * n / total).toFixed(1) + '%';
+      }
+
+      function formatGradePctOnly(counts, grade) {
+        const n = counts[grade] || 0;
+        if (!n) return '—';
+        return gradePct(counts, grade);
+      }
+
+      function aggregateGradeCounts(records) {
+        const before = emptyGradeCounts();
+        const after = emptyGradeCounts();
+        let total = 0;
+        for (const rec of records) {
+          total += 1;
+          const gb = normalizeGradeValue(rec.grade_before);
+          const ga = normalizeGradeValue(rec.grade_after);
+          if (gb) before[gb] += 1;
+          if (ga) after[ga] += 1;
+        }
+        return { total, before, after };
+      }
+
       function refreshGradeStats() {
         if (!statsGroupBy.value.length) {
           statsRows.value = [];
@@ -1159,24 +1279,250 @@
         Object.assign(statsTotals.after, totals.after);
       }
 
+      function statsPctScopeRecords() {
+        let list = allRecords.value;
+        if (statsPctOperators.value.length) {
+          const set = new Set(statsPctOperators.value);
+          list = list.filter(r => set.has(r.operator));
+        }
+        if (statsPctGroups.value.length) {
+          const set = new Set(statsPctGroups.value);
+          list = list.filter(r => set.has(r.group_name));
+        }
+        if (statsPctSubgroups.value.length) {
+          const set = new Set(statsPctSubgroups.value);
+          list = list.filter(r => set.has(r.subgroup_name));
+        }
+        return list;
+      }
+
+      function buildStatsPctScopeLabel() {
+        const parts = [];
+        if (statsPctOperators.value.length) parts.push(statsPctOperators.value.join('、'));
+        if (statsPctGroups.value.length) parts.push(statsPctGroups.value.join('、'));
+        if (statsPctSubgroups.value.length) parts.push(statsPctSubgroups.value.join('、'));
+        return parts.length ? parts.join(' · ') : '全部记录';
+      }
+
+      function onStatsPctGroupChange() {
+        const allowed = new Set(statsPctSubgroupOptions.value);
+        statsPctSubgroups.value = statsPctSubgroups.value.filter(s => allowed.has(s));
+      }
+
+      function refreshGradePctStats() {
+        const records = statsPctScopeRecords();
+        if (!records.length) {
+          statsPctRows.value = [];
+          statsPctTotals.total = 0;
+          Object.assign(statsPctTotals.before, emptyGradeCounts());
+          Object.assign(statsPctTotals.after, emptyGradeCounts());
+          renderGradePctCharts();
+          ElMessage.warning('当前筛选范围内无记录');
+          return;
+        }
+        if (statsPctByOperator.value) {
+          const ops = [...new Set(records.map(r => r.operator).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+          statsPctRows.value = ops.map(op => {
+            const sub = records.filter(r => r.operator === op);
+            const agg = aggregateGradeCounts(sub);
+            return { label: op, total: agg.total, before: agg.before, after: agg.after };
+          });
+        } else {
+          const agg = aggregateGradeCounts(records);
+          statsPctRows.value = [{ label: buildStatsPctScopeLabel(), total: agg.total, before: agg.before, after: agg.after }];
+        }
+        const totals = aggregateGradeCounts(records);
+        statsPctTotals.total = totals.total;
+        Object.assign(statsPctTotals.before, totals.before);
+        Object.assign(statsPctTotals.after, totals.after);
+        nextTick(() => renderGradePctCharts());
+      }
+
+      function gradePieOption(title, counts) {
+        const data = GRADES.map(g => ({ name: gradeShort(g), value: counts[g] || 0 }))
+          .filter(d => d.value > 0);
+        return {
+          title: { text: title, left: 'center', textStyle: { fontSize: 13, fontWeight: 600 } },
+          tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+          legend: { orient: 'vertical', left: 'left', top: 'middle', textStyle: { fontSize: 11 } },
+          series: [{
+            type: 'pie',
+            radius: ['36%', '62%'],
+            center: ['58%', '52%'],
+            data,
+            label: { formatter: '{b}\n{d}%', fontSize: 11 },
+          }],
+        };
+      }
+
+      function renderGradePctCharts() {
+        if (!statsDialogVisible.value || statsMainTab.value !== 'pct' || typeof echarts === 'undefined') return;
+        nextTick(() => {
+          const titleSuffix = statsPctTotals.total ? `（${buildStatsPctScopeLabel()}，n=${statsPctTotals.total}）` : '';
+          if (chartGradeBeforeRef.value && statsPctTotals.total) {
+            const ch = getChart('grade-before', chartGradeBeforeRef.value);
+            ch?.setOption(gradePieOption('调色前 Grade 占比' + titleSuffix, statsPctTotals.before), true);
+          } else {
+            try { chartInstances['grade-before']?.dispose(); } catch (_) {}
+            delete chartInstances['grade-before'];
+          }
+          if (chartGradeAfterRef.value && statsPctTotals.total) {
+            const ch = getChart('grade-after', chartGradeAfterRef.value);
+            ch?.setOption(gradePieOption('调色后 Grade 占比' + titleSuffix, statsPctTotals.after), true);
+          } else {
+            try { chartInstances['grade-after']?.dispose(); } catch (_) {}
+            delete chartInstances['grade-after'];
+          }
+        });
+      }
+
+      function onStatsTabChange(tab) {
+        if (tab === 'pct') refreshGradePctStats();
+      }
+
+      function onStatsDialogOpened() {
+        if (statsMainTab.value === 'pct') refreshGradePctStats();
+      }
+
       function openGradeStats() {
         if (!statsGroupBy.value.length) statsGroupBy.value = [...DEFAULT_STAT_GROUP_BY];
+        statsMainTab.value = 'count';
         refreshGradeStats();
         statsDialogVisible.value = true;
       }
 
-      function stabilityRecordIds() {
-        let base = stabilityUseTableFilter.value ? filteredRecords.value : allRecords.value;
-        let ids = base.map(r => r.id);
-        if (stabilityUseSelection.value && selectedIds.value.length) {
-          const sel = new Set(selectedIds.value);
-          ids = ids.filter(id => sel.has(id));
+      function stabilityScopeRecords() {
+        let list = allRecords.value.filter(r => r.lstar_before != null && r.lstar_after != null);
+        if (stabilityOperators.value.length) {
+          const set = new Set(stabilityOperators.value);
+          list = list.filter(r => set.has(r.operator));
         }
-        return ids;
+        if (stabilityGroups.value.length) {
+          const set = new Set(stabilityGroups.value);
+          list = list.filter(r => set.has(r.group_name));
+        }
+        if (stabilitySubgroups.value.length) {
+          const set = new Set(stabilitySubgroups.value);
+          list = list.filter(r => set.has(r.subgroup_name));
+        }
+        return list;
       }
 
+      function computeLstarDispersion(records) {
+        const b = records.map(r => Number(r.lstar_before));
+        const a = records.map(r => Number(r.lstar_after));
+        function std(arr) {
+          if (arr.length < 2) return 0;
+          const m = arr.reduce((s, v) => s + v, 0) / arr.length;
+          return Math.sqrt(arr.reduce((s, v) => s + (v - m) ** 2, 0) / (arr.length - 1));
+        }
+        return {
+          n: records.length,
+          stdBefore: std(b).toFixed(2),
+          stdAfter: std(a).toFixed(2),
+        };
+      }
+
+      function onStabilityGroupChange() {
+        const allowed = new Set(stabilitySubgroupOptions.value);
+        stabilitySubgroups.value = stabilitySubgroups.value.filter(s => allowed.has(s));
+      }
+
+      function renderLstarDensityChart() {
+        const records = stabilityScopeRecords();
+        Object.assign(stabilityScatterSummary, computeLstarDispersion(records));
+        const ch = getChart('scatter', chartScatterRef.value);
+        if (!ch) return;
+        if (!records.length) {
+          ch.clear();
+          return;
+        }
+        const beforeVals = records.map(r => Number(r.lstar_before));
+        const afterVals = records.map(r => Number(r.lstar_after));
+        const allVals = [...beforeVals, ...afterVals];
+        const minL = Math.floor(Math.min(...allVals) - 2);
+        const maxL = Math.ceil(Math.max(...allVals) + 2);
+        const span = maxL - minL || 1;
+        const binCount = Math.min(24, Math.max(10, Math.ceil(Math.sqrt(records.length * 2))));
+        const binWidth = span / binCount;
+
+        function histCounts(vals) {
+          const counts = Array(binCount).fill(0);
+          vals.forEach(v => {
+            let i = Math.floor((v - minL) / binWidth);
+            if (i >= binCount) i = binCount - 1;
+            if (i < 0) i = 0;
+            counts[i] += 1;
+          });
+          return counts;
+        }
+
+        const binLabels = Array.from({ length: binCount }, (_, i) => {
+          const lo = minL + i * binWidth;
+          const hi = lo + binWidth;
+          return `${lo.toFixed(0)}–${hi.toFixed(0)}`;
+        });
+
+        function stripPoints(vals, xCenter) {
+          return vals.map((y, i) => [xCenter + (((i * 0.6180339887) % 1) - 0.5) * 0.32, y]);
+        }
+
+        const stdB = Number(stabilityScatterSummary.stdBefore);
+        const stdA = Number(stabilityScatterSummary.stdAfter);
+
+        ch.setOption({
+          title: {
+            text: `L* 密集度对比（调色前 σ=${stdB}，调色后 σ=${stdA}${stdA < stdB ? '，调色后更集中' : stdA > stdB ? '，调色后更分散' : ''}）`,
+            left: 'center',
+            textStyle: { fontSize: 13, fontWeight: 600 },
+          },
+          tooltip: {
+            trigger: 'item',
+            formatter(p) {
+              if (p.seriesType === 'bar') {
+                return `${p.seriesName}<br/>L* ${p.name}<br/>频数 ${p.value}`;
+              }
+              const phase = p.seriesName;
+              return `${phase}<br/>L* ${Number(p.value[1]).toFixed(2)}`;
+            },
+          },
+          legend: { data: ['调色前', '调色后'], top: 28 },
+          grid: [
+            { left: 56, right: 24, top: 56, height: '38%' },
+            { left: 56, right: 24, top: '62%', height: '30%' },
+          ],
+          xAxis: [
+            { type: 'category', data: binLabels, gridIndex: 0, axisLabel: { rotate: binCount > 14 ? 40 : 0, fontSize: 10, interval: Math.max(0, Math.floor(binCount / 12)) } },
+            {
+              type: 'value', min: -0.55, max: 1.55, gridIndex: 1, splitLine: { show: false },
+              axisTick: { show: false },
+              axisLabel: {
+                formatter(v) {
+                  if (Math.abs(v - 0) < 0.01) return '调色前';
+                  if (Math.abs(v - 1) < 0.01) return '调色后';
+                  return '';
+                },
+                fontSize: 12,
+              },
+            },
+          ],
+          yAxis: [
+            { type: 'value', name: '频数', gridIndex: 0, minInterval: 1 },
+            { type: 'value', name: 'L*', gridIndex: 1, min: minL, max: maxL, splitLine: { lineStyle: { type: 'dashed' } } },
+          ],
+          series: [
+            { name: '调色前', type: 'bar', xAxisIndex: 0, yAxisIndex: 0, data: histCounts(beforeVals), itemStyle: { color: 'rgba(148,163,184,0.85)' }, barGap: 0 },
+            { name: '调色后', type: 'bar', xAxisIndex: 0, yAxisIndex: 0, data: histCounts(afterVals), itemStyle: { color: 'rgba(59,130,246,0.85)' } },
+            { name: '调色前', type: 'scatter', xAxisIndex: 1, yAxisIndex: 1, data: stripPoints(beforeVals, 0), symbolSize: 9, itemStyle: { opacity: 0.55, color: '#94a3b8' } },
+            { name: '调色后', type: 'scatter', xAxisIndex: 1, yAxisIndex: 1, data: stripPoints(afterVals, 1), symbolSize: 9, itemStyle: { opacity: 0.55, color: '#3b82f6' } },
+          ],
+        }, true);
+      }
+
+      const STABILITY_CHART_KEYS = ['scatter', 'within', 'person', 'cross', 'boundary'];
+
       function disposeStabilityCharts() {
-        Object.keys(chartInstances).forEach(k => {
+        STABILITY_CHART_KEYS.forEach(k => {
           try { chartInstances[k]?.dispose(); } catch (_) {}
           delete chartInstances[k];
         });
@@ -1215,6 +1561,10 @@
       function renderStabilityCharts() {
         if (!stabilityDialogVisible.value || typeof echarts === 'undefined') return;
         nextTick(() => {
+          if (stabilityTab.value === 'scatter') {
+            renderLstarDensityChart();
+            return;
+          }
           const ws = stabilityReport.within_subgroup || {};
           const groups = ws.groups || [];
           if (stabilityTab.value === 'within' && chartWithinRef.value) {
@@ -1294,19 +1644,20 @@
       }
 
       async function refreshStabilityStats() {
-        const ids = stabilityRecordIds();
-        if (!ids.length) {
-          ElMessage.warning('当前统计范围内无记录');
+        const scoped = stabilityScopeRecords();
+        if (!scoped.length) {
+          Object.keys(stabilityReport).forEach(k => delete stabilityReport[k]);
+          Object.assign(stabilityScatterSummary, { n: 0, stdBefore: '—', stdAfter: '—' });
+          renderStabilityCharts();
+          ElMessage.warning('当前筛选范围内无有效 L* 记录');
           return;
         }
         stabilityLoading.value = true;
         try {
-          const body = {
-            min_subgroup_n: stabilityMinN.value,
-            record_ids: ids,
-          };
+          const body = { min_subgroup_n: stabilityMinN.value };
           if (stabilityOperators.value.length) body.operators = [...stabilityOperators.value];
           if (stabilityGroups.value.length) body.group_names = [...stabilityGroups.value];
+          if (stabilitySubgroups.value.length) body.subgroup_names = [...stabilitySubgroups.value];
           const data = await apiFetch('/experiments/stats/stability', { method: 'POST', body });
           Object.keys(stabilityReport).forEach(k => delete stabilityReport[k]);
           Object.assign(stabilityReport, data);
@@ -1323,10 +1674,12 @@
       }
 
       function onStabilityDialogOpened() {
+        renderStabilityCharts();
         refreshStabilityStats();
       }
 
       watch(stabilityDialogVisible, v => { if (!v) disposeStabilityCharts(); });
+      watch(statsDialogVisible, v => { if (!v) { try { chartInstances['grade-before']?.dispose(); } catch (_) {} try { chartInstances['grade-after']?.dispose(); } catch (_) {} delete chartInstances['grade-before']; delete chartInstances['grade-after']; } });
 
       function filterSuggest(list, queryString) {
         const q = (queryString || '').trim().toLowerCase();
@@ -1888,11 +2241,16 @@
         gradeOptions, colorOptions, boolOptions, blueColors, greenColors, brownColors,
         importDialogVisible, importLoading, debugRuns, importPreview, debugUiUrl,
         compareDialogVisible, compareDialog, compareLoading, compareLoadingId, formRowForCompare,
-        statsDialogVisible, statsGroupBy, statsRows, statsTotals, statDimOptions, activeStatDims,
-        stabilityDialogVisible, stabilityLoading, stabilityMinN, stabilityUseTableFilter, stabilityUseSelection,
-        stabilityOperators, stabilityGroups, stabilityTab, stabilityReport, stabilityOperatorOptions, stabilityGroupOptions,
-        chartWithinRef, chartPersonRef, chartCrossRef, chartBoundaryRef,
-        openStabilityStats, refreshStabilityStats, renderStabilityCharts, onStabilityDialogOpened,
+        statsDialogVisible, statsMainTab, statsGroupBy, statsRows, statsTotals, statDimOptions, activeStatDims,
+        statsPctOperators, statsPctGroups, statsPctSubgroups, statsPctByOperator, statsPctRows, statsPctTotals,
+        statsPctOperatorOptions, statsPctGroupOptions, statsPctSubgroupOptions,
+        chartGradeBeforeRef, chartGradeAfterRef, formatGradePctOnly, gradePct,
+        refreshGradePctStats, onStatsPctGroupChange, onStatsTabChange, onStatsDialogOpened,
+        stabilityDialogVisible, stabilityLoading, stabilityMinN,
+        stabilityOperators, stabilityGroups, stabilitySubgroups, stabilityTab, stabilityReport,
+        stabilityScatterSummary, stabilityOperatorOptions, stabilityGroupOptions, stabilitySubgroupOptions,
+        chartScatterRef, chartWithinRef, chartPersonRef, chartCrossRef, chartBoundaryRef,
+        openStabilityStats, refreshStabilityStats, renderStabilityCharts, onStabilityDialogOpened, onStabilityGroupChange,
         refreshAll, openCreate, openEdit, saveForm, deleteOne, bulkDelete, suggestNames,
         openGradeStats, refreshGradeStats, gradeShort, gradeCountSum, formatStatDim,
         suggestOperator, suggestCamera, suggestLight, suggestColor, suggestGrade,

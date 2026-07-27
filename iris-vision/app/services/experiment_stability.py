@@ -113,11 +113,12 @@ def analyze_stability(
     min_subgroup_n: int = 3,
     operators: Optional[list[str]] = None,
     group_names: Optional[list[str]] = None,
+    subgroup_names: Optional[list[str]] = None,
     record_ids: Optional[list[int]] = None,
 ) -> dict[str, Any]:
     """对实验记录做 L* 离散度分析。
 
-    可选 filters：operators、group_names、record_ids（均为白名单，空则不过滤）。
+    可选 filters：operators、group_names、subgroup_names、record_ids（均为白名单，空则不过滤）。
     min_subgroup_n：小组内重复性分析要求的最少重复拍摄次数。
     """
     prepared = _prepare_rows(rows, boundaries)
@@ -131,6 +132,9 @@ def analyze_stability(
     if group_names:
         grp_set = set(group_names)
         prepared = [r for r in prepared if r.get("group_name") in grp_set]
+    if subgroup_names:
+        sub_set = set(subgroup_names)
+        prepared = [r for r in prepared if r.get("subgroup_name") in sub_set]
 
     report: dict[str, Any] = {
         "boundaries": boundaries,
@@ -139,6 +143,7 @@ def analyze_stability(
             "min_subgroup_n": min_subgroup_n,
             "operators": operators or [],
             "group_names": group_names or [],
+            "subgroup_names": subgroup_names or [],
             "record_ids": record_ids or [],
         },
     }
