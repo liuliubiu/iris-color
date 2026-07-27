@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS experiment_records (
     debug_run_id TEXT,
     skip_quality INTEGER NOT NULL DEFAULT 0,
     manual_adjusted INTEGER NOT NULL DEFAULT 0,
+    include_in_stats INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -130,6 +131,7 @@ CREATE TABLE IF NOT EXISTS experiment_records (
     debug_run_id VARCHAR(32) NULL,
     skip_quality TINYINT(1) NOT NULL DEFAULT 0,
     manual_adjusted TINYINT(1) NOT NULL DEFAULT 0,
+    include_in_stats TINYINT(1) NOT NULL DEFAULT 1,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
     INDEX idx_exp_group (group_name),
@@ -181,6 +183,8 @@ def _sqlite_migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE experiment_records ADD COLUMN skip_quality INTEGER NOT NULL DEFAULT 0")
     if "manual_adjusted" not in cols:
         conn.execute("ALTER TABLE experiment_records ADD COLUMN manual_adjusted INTEGER NOT NULL DEFAULT 0")
+    if "include_in_stats" not in cols:
+        conn.execute("ALTER TABLE experiment_records ADD COLUMN include_in_stats INTEGER NOT NULL DEFAULT 1")
 
 
 def _mysql_migrate(conn) -> None:
@@ -203,6 +207,9 @@ def _mysql_migrate(conn) -> None:
         cur.execute("SHOW COLUMNS FROM experiment_records LIKE 'manual_adjusted'")
         if not cur.fetchone():
             cur.execute("ALTER TABLE experiment_records ADD COLUMN manual_adjusted TINYINT(1) NOT NULL DEFAULT 0")
+        cur.execute("SHOW COLUMNS FROM experiment_records LIKE 'include_in_stats'")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE experiment_records ADD COLUMN include_in_stats TINYINT(1) NOT NULL DEFAULT 1")
     conn.commit()
 
 
@@ -218,6 +225,9 @@ class ExperimentStore(ABC):
 
     @abstractmethod
     def update_record(self, record_id: int, data: dict[str, Any]) -> Optional[dict[str, Any]]: ...
+
+    @abstractmethod
+    def update_include_in_stats(self, record_id: int, include: bool) -> Optional[dict[str, Any]]: ...
 
     @abstractmethod
     def update_record_images(
@@ -355,6 +365,7 @@ class ExperimentStore(ABC):
 
         out["skip_quality"] = self._coerce_bool(data.get("skip_quality"), False)
         out["manual_adjusted"] = self._coerce_bool(data.get("manual_adjusted"), False)
+        out["include_in_stats"] = self._coerce_bool(data.get("include_in_stats"), True)
 
         return out
 
@@ -377,9 +388,11 @@ class SqliteExperimentStore(ExperimentStore):
         d = {k: row[k] for k in row.keys()}
         if d.get("experiment_date"):
             d["experiment_date"] = str(d["experiment_date"])[:10]
-        for field in ("skip_quality", "manual_adjusted"):
+        for field in ("skip_quality", "manual_adjusted", "include_in_stats"):
             if field in d and d[field] is not None:
                 d[field] = bool(d[field])
+        if "include_in_stats" not in d or d["include_in_stats"] is None:
+            d["include_in_stats"] = True
         return d
 
     def list_records(
@@ -442,9 +455,9 @@ class SqliteExperimentStore(ExperimentStore):
                     group_name, subgroup_name, experiment_date, operator,
                     camera_device, light_device, illuminance, color,
                     grade_before, lstar_before, grade_after, lstar_after,
-                    notes, image_rel, debug_run_id, skip_quality, manual_adjusted,
+                    notes, image_rel, debug_run_id, skip_quality, manual_adjusted, include_in_stats,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["group_name"],
@@ -464,6 +477,7 @@ class SqliteExperimentStore(ExperimentStore):
                     payload["debug_run_id"],
                     int(payload["skip_quality"]),
                     int(payload["manual_adjusted"]),
+                    int(payload["include_in_stats"]),
                     now,
                     now,
                 ),
@@ -507,7 +521,7 @@ class SqliteExperimentStore(ExperimentStore):
                     camera_device = ?, light_device = ?, illuminance = ?, color = ?,
                     grade_before = ?, lstar_before = ?, grade_after = ?, lstar_after = ?,
                     notes = ?, image_rel = ?, debug_run_id = ?,
-                    skip_quality = ?, manual_adjusted = ?, updated_at = ?
+                    skip_quality = ?, manual_adjusted = ?, include_in_stats = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -528,9 +542,21 @@ class SqliteExperimentStore(ExperimentStore):
                     payload["debug_run_id"],
                     int(payload["skip_quality"]),
                     int(payload["manual_adjusted"]),
+                    int(payload["include_in_stats"]),
                     now,
                     record_id,
                 ),
+            )
+        return self.get_by_id(record_id)
+
+    def update_include_in_stats(self, record_id: int, include: bool) -> Optional[dict[str, Any]]:
+        if not self.get_by_id(record_id):
+            return None
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE experiment_records SET include_in_stats = ?, updated_at = ? WHERE id = ?",
+                (1 if include else 0, now, record_id),
             )
         return self.get_by_id(record_id)
 
@@ -654,9 +680,11 @@ class MysqlExperimentStore(ExperimentStore):
         for k in ("lstar_before", "lstar_after"):
             if out.get(k) is not None:
                 out[k] = round(float(out[k]), 2)
-        for field in ("skip_quality", "manual_adjusted"):
+        for field in ("skip_quality", "manual_adjusted", "include_in_stats"):
             if field in out and out[field] is not None:
                 out[field] = bool(out[field])
+        if out.get("include_in_stats") is None:
+            out["include_in_stats"] = True
         return out
 
     def list_records(
@@ -729,9 +757,9 @@ class MysqlExperimentStore(ExperimentStore):
                         group_name, subgroup_name, experiment_date, operator,
                         camera_device, light_device, illuminance, color,
                         grade_before, lstar_before, grade_after, lstar_after,
-                        notes, image_rel, debug_run_id, skip_quality, manual_adjusted,
+                        notes, image_rel, debug_run_id, skip_quality, manual_adjusted, include_in_stats,
                         created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         payload["group_name"],
@@ -751,6 +779,7 @@ class MysqlExperimentStore(ExperimentStore):
                         payload["debug_run_id"],
                         int(payload["skip_quality"]),
                         int(payload["manual_adjusted"]),
+                        int(payload["include_in_stats"]),
                         now,
                         now,
                     ),
@@ -810,7 +839,7 @@ class MysqlExperimentStore(ExperimentStore):
                         camera_device = %s, light_device = %s, illuminance = %s, color = %s,
                         grade_before = %s, lstar_before = %s, grade_after = %s, lstar_after = %s,
                         notes = %s, image_rel = %s, debug_run_id = %s,
-                        skip_quality = %s, manual_adjusted = %s, updated_at = %s
+                        skip_quality = %s, manual_adjusted = %s, include_in_stats = %s, updated_at = %s
                     WHERE id = %s
                     """,
                     (
@@ -831,9 +860,29 @@ class MysqlExperimentStore(ExperimentStore):
                         payload["debug_run_id"],
                         int(payload["skip_quality"]),
                         int(payload["manual_adjusted"]),
+                        int(payload["include_in_stats"]),
                         now,
                         record_id,
                     ),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        return self.get_by_id(record_id)
+
+    def update_include_in_stats(self, record_id: int, include: bool) -> Optional[dict[str, Any]]:
+        if not self.get_by_id(record_id):
+            return None
+        now = _utc_now()
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE experiment_records SET include_in_stats = %s, updated_at = %s WHERE id = %s",
+                    (1 if include else 0, now, record_id),
                 )
             conn.commit()
         except Exception:

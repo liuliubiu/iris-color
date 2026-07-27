@@ -8,6 +8,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 from app.services.experiment_debug_import import (
     COMPARE_AUDIT_FILENAME,
+    apply_record_recognition,
+    build_record_recognition_preview,
     enrich_audit_with_current_standards,
     enrich_import_payload_urls,
     experiment_snapshot_urls,
@@ -19,8 +21,6 @@ from app.services.experiment_debug_import import (
     rebuild_compare_audit,
     snapshot_compare_images,
 )
-from app.services.experiment_stability import analyze_stability
-from app.services.experiment_stability import analyze_stability
 from app.services.experiment_stability import analyze_stability
 from app.services.experiment_store import ExperimentStore, create_experiment_store
 from app.services.pipeline import load_config
@@ -254,14 +254,122 @@ def get_record(record_id: int, key: str = Query(...)):
 
 
 @router.post("/records/{record_id}/ensure-compare-images")
-def ensure_compare_images(record_id: int, key: str = Query(...)):
+def ensure_compare_images(
+    record_id: int,
+    key: str = Query(...),
+    force: bool = Query(False, description="强制用当前算法重算并覆盖已有快照"),
+):
     """按需生成或返回实验记录的调色前后对比图。"""
     config = _verify_key(key)
     store = _get_store(config)
     try:
+        if force:
+            record = store.get_by_id(record_id)
+            if not record:
+                raise HTTPException(status_code=404, detail="record_not_found")
+            snapshot_root = _experiment_snapshot_root(config)
+            from app.services.experiment_debug_import import generate_compare_snapshots_for_record
+
+            paths = generate_compare_snapshots_for_record(
+                record,
+                snapshot_root,
+                record_id,
+                config,
+                CONFIG_PATH,
+                IMG_ROOT,
+                _debug_output_root(config),
+                force=True,
+            )
+            if paths.get("image_before_rel"):
+                record = _apply_compare_snapshot_paths(store, record, paths)
+            out = dict(record)
+            audit = load_compare_audit(snapshot_root, record_id)
+            if audit:
+                audit = enrich_audit_with_current_standards(audit, config)
+            urls = experiment_snapshot_urls(
+                record_id,
+                config.get("experiments", {}).get("api_key", "iris-color-dev"),
+            )
+            api_key = config.get("experiments", {}).get("api_key", "iris-color-dev")
+            return {
+                **out,
+                "thumb_before_url": urls["thumb_before_url"],
+                "thumb_after_url": urls["thumb_after_url"],
+                "compare_audit": audit,
+                "audit_url": f"/experiments/snapshots/{record_id}/{COMPARE_AUDIT_FILENAME}?key={api_key}"
+                if audit
+                else None,
+            }
         return ensure_record_compare_images(config, store, record_id)
     except ValueError as exc:
         raise _handle_value_error(exc) from exc
+
+
+@router.post("/records/{record_id}/recognize")
+def recognize_record_preview(record_id: int, key: str = Query(...), body: dict = Body(default={})):
+    """对关联原图用当前算法识别（预览，不写库）。"""
+    config = _verify_key(key)
+    store = _get_store(config)
+    record = store.get_by_id(record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="record_not_found")
+    try:
+        return build_record_recognition_preview(
+            record,
+            config,
+            CONFIG_PATH,
+            IMG_ROOT,
+            _debug_output_root(config),
+            skip_quality=body.get("skip_quality"),
+            manual_params=body.get("manual_params"),
+            closeup_mode=body.get("mode") or "auto",
+        )
+    except ValueError as exc:
+        raise _handle_value_error(exc) from exc
+
+
+@router.post("/records/{record_id}/recognize/apply")
+def recognize_record_apply(record_id: int, key: str = Query(...), body: dict = Body(...)):
+    """应用重新识别结果，可选覆盖实验记录字段与对比快照。"""
+    config = _verify_key(key)
+    store = _get_store(config)
+    record = store.get_by_id(record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="record_not_found")
+
+    overwrite_record = bool(body.get("overwrite_record", False))
+    overwrite_snapshots = bool(body.get("overwrite_snapshots", False))
+    if not overwrite_record and not overwrite_snapshots:
+        raise HTTPException(status_code=400, detail="nothing_to_overwrite")
+
+    try:
+        result = apply_record_recognition(
+            record,
+            store,
+            config,
+            CONFIG_PATH,
+            IMG_ROOT,
+            _debug_output_root(config),
+            _experiment_snapshot_root(config),
+            overwrite_record=overwrite_record,
+            overwrite_snapshots=overwrite_snapshots,
+            skip_quality=body.get("skip_quality"),
+            manual_params=body.get("manual_params"),
+            closeup_mode=body.get("mode") or "auto",
+        )
+    except ValueError as exc:
+        raise _handle_value_error(exc) from exc
+
+    api_key = config.get("experiments", {}).get("api_key", "iris-color-dev")
+    out_record = result["record"]
+    if out_record.get("image_before_rel") and out_record.get("image_after_rel"):
+        urls = experiment_snapshot_urls(record_id, api_key)
+        out_record = {
+            **out_record,
+            "thumb_before_url": urls["thumb_before_url"],
+            "thumb_after_url": urls["thumb_after_url"],
+        }
+    return result
 
 
 @router.post("/records", status_code=201)
@@ -287,6 +395,19 @@ def update_record(record_id: int, key: str = Query(...), payload: dict = Body(..
     if not record:
         raise HTTPException(status_code=404, detail="record_not_found")
     record = _persist_compare_snapshots(config, store, record)
+    return record
+
+
+@router.patch("/records/{record_id}/include-in-stats")
+def patch_include_in_stats(record_id: int, key: str = Query(...), body: dict = Body(...)):
+    """快速切换是否纳入统计（表格内勾选）。"""
+    config = _verify_key(key)
+    store = _get_store(config)
+    if "include_in_stats" not in body:
+        raise HTTPException(status_code=400, detail="missing_include_in_stats")
+    record = store.update_include_in_stats(record_id, bool(body["include_in_stats"]))
+    if not record:
+        raise HTTPException(status_code=404, detail="record_not_found")
     return record
 
 

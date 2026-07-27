@@ -79,9 +79,18 @@ def dist_to_boundary(l_star: float, boundaries: list[float]) -> float:
     return min(abs(l_star - b) for b in boundaries)
 
 
+def _is_included_in_stats(row: dict) -> bool:
+    v = row.get("include_in_stats")
+    if v is None:
+        return True
+    return bool(v)
+
+
 def _prepare_rows(rows: Iterable[dict], boundaries: list[float]) -> list[dict]:
     out = []
     for r in rows:
+        if not _is_included_in_stats(r):
+            continue
         if r.get("lstar_before") is None or r.get("lstar_after") is None:
             continue
         rec = dict(r)

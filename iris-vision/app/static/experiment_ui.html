@@ -35,6 +35,10 @@
   }
   .exp-table.el-table th.el-table-column--selection .cell { padding: 0; }
   .exp-table.el-table th.el-table-column--selection .el-checkbox { display: none; }
+  .exp-table.el-table td.exp-stats-toggle .cell {
+    display: flex; align-items: center; justify-content: center; padding: 0;
+  }
+  .exp-table.el-table th.exp-stats-toggle .cell { padding: 0; text-align: center; font-size: 12px; }
 
   /* FilterHeader */
   .fh-wrap { display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%; user-select: none; }
@@ -142,6 +146,35 @@
   .stats-chart { width: 100%; height: 260px; }
   .stats-pct { font-size: 11px; color: #64748b; }
   .scatter-hint { font-size: 12px; color: #64748b; margin-bottom: 8px; line-height: 1.6; }
+
+  /* 重新识别 */
+  .recognize-body { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  .recognize-canvas-wrap {
+    background: #0f172a; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;
+    position: relative; min-height: 280px;
+  }
+  .recognize-canvas-wrap canvas { display: block; width: 100%; height: auto; cursor: default; }
+  .recognize-canvas-cap {
+    font-size: 12px; color: #64748b; margin-bottom: 6px; line-height: 1.5;
+  }
+  .recognize-side { display: flex; flex-direction: column; gap: 10px; }
+  .recognize-compare-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .recognize-compare-table th, .recognize-compare-table td {
+    border: 1px solid #e5e7eb; padding: 6px 8px; text-align: center;
+  }
+  .recognize-compare-table th { background: #f8fafc; color: #475569; font-weight: 600; }
+  .recognize-compare-table .changed { color: #b45309; font-weight: 600; }
+  .recognize-toolbar {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px;
+    padding-top: 12px; border-top: 1px solid #e5e7eb;
+  }
+  .recognize-overlay-img {
+    margin-top: 8px; border: 1px solid #e5e7eb; border-radius: 6px; max-width: 100%;
+    background: #0f172a;
+  }
+  @media (max-width: 768px) {
+    .recognize-body { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
@@ -187,6 +220,21 @@
             @row-dblclick="openEdit"
             empty-text="暂无记录，点击「新建记录」添加"
           >
+            <el-table-column width="56" align="center" fixed="left" class-name="exp-stats-toggle" label-class-name="exp-stats-toggle">
+              <template v-slot:header>
+                <exp-filter-header title="统计" field="include_in_stats" :fixed-options="boolOptions"
+                  :current-sort="sortState" :column-filters="columnFilters" :all-records="allRecords"
+                  @sort-change="onHeaderSort" @filter-change="onHeaderFilter" />
+              </template>
+              <template v-slot="scope">
+                <el-checkbox
+                  :model-value="scope.row.include_in_stats !== false"
+                  :disabled="includeStatsSavingId === scope.row.id"
+                  @click.stop
+                  @change="(v) => toggleIncludeInStats(scope.row, v)"
+                />
+              </template>
+            </el-table-column>
             <el-table-column type="selection" width="48" align="center" fixed="left" />
             <el-table-column prop="id" width="72" align="center" fixed="left">
               <template v-slot:header>
@@ -350,9 +398,11 @@
               </template>
             </el-table-column>
 
-            <el-table-column label="操作" width="110" align="center" fixed="right">
+            <el-table-column label="操作" width="160" align="center" fixed="right">
               <template v-slot="scope">
                 <div class="action-btns">
+                  <el-button v-if="canRecognize(scope.row)" type="success" link size="small"
+                    @click.stop="openRecognizeDialog(scope.row)">重识别</el-button>
                   <el-button type="warning" link size="small" @click.stop="openEdit(scope.row)">编辑</el-button>
                   <el-button type="danger" link size="small" @click.stop="deleteOne(scope.row)">删除</el-button>
                 </div>
@@ -379,9 +429,12 @@
 
     <!-- 编辑抽屉 -->
     <el-drawer v-model="drawerVisible" :title="drawerTitle" size="520px" :close-on-click-modal="false">
-      <div v-if="canCompare(formRowForCompare)" style="margin-bottom:12px">
-        <el-button type="primary" plain :loading="compareLoading" @click="openCompareFromForm">
+      <div v-if="canCompare(formRowForCompare) || canRecognize(formRowForCompare)" style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <el-button v-if="canCompare(formRowForCompare)" type="primary" plain :loading="compareLoading" @click="openCompareFromForm">
           查看调色前后对比
+        </el-button>
+        <el-button v-if="canRecognize(formRowForCompare)" type="warning" plain :loading="recognizeLoading" @click="openRecognizeFromForm">
+          重新识别
         </el-button>
       </div>
       <div v-if="importPreview.thumb_url || importPreview.before_url || importPreview.after_url || importPreview.compare_url" class="import-preview">
@@ -475,6 +528,10 @@
         </el-form-item>
         <el-form-item label="人工调整识别">
           <el-switch v-model="form.manual_adjusted" active-text="是" inactive-text="否" />
+        </el-form-item>
+        <el-form-item label="纳入统计">
+          <el-switch v-model="form.include_in_stats" active-text="是" inactive-text="否" />
+          <div class="form-hint">关闭后，该记录不参与等级统计、L* 密集度等汇总分析</div>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="form.notes" type="textarea" :rows="2" maxlength="500" show-word-limit />
@@ -581,6 +638,68 @@
       </div>
     </el-dialog>
 
+    <!-- 重新识别 -->
+    <el-dialog v-model="recognizeDialogVisible" title="重新识别（当前算法）" width="920px" top="4vh"
+      destroy-on-close @closed="onRecognizeDialogClosed">
+      <div v-if="recognizeTarget" style="font-size:12px;color:#64748b;margin-bottom:10px">
+        记录 #{{ recognizeTarget.id }}
+        <span v-if="recognizeTarget.image_rel"> · 原图 {{ recognizeTarget.image_rel }}</span>
+        <span v-else-if="recognizeTarget.debug_run_id"> · Debug {{ recognizeTarget.debug_run_id }}</span>
+      </div>
+      <div class="recognize-body" v-loading="recognizeLoading">
+        <div>
+          <div class="recognize-canvas-cap">
+            拖动蓝/红/绿圆环调整识别区域；中心十字可移动瞳孔位置。
+            <span v-if="recognizePreview?.skip_quality_used" style="color:#b45309">（已自动跳过质量检测）</span>
+          </div>
+          <div class="recognize-canvas-wrap">
+            <canvas ref="recognizeCanvasRef" @pointerdown="onRecognizePointerDown"
+              @pointermove="onRecognizePointerMove" @pointerup="onRecognizePointerUp"
+              @pointercancel="onRecognizePointerUp" @pointerleave="onRecognizePointerLeave"></canvas>
+          </div>
+          <img v-if="recognizeOverlayUrl" class="recognize-overlay-img" :src="recognizeOverlayUrl" alt="识别区域" />
+        </div>
+        <div class="recognize-side">
+          <table class="recognize-compare-table" v-if="recognizePreview">
+            <thead>
+              <tr><th>字段</th><th>当前记录</th><th>新识别</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in recognizeDiffRows" :key="row.key">
+                <td>{{ row.label }}</td>
+                <td>{{ row.current }}</td>
+                <td :class="{ changed: row.changed }">{{ row.proposed }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else style="font-size:13px;color:#909399;text-align:center;padding:24px">
+            点击「自动识别」开始
+          </div>
+          <div v-if="recognizePreview" style="font-size:12px;color:#64748b;line-height:1.6">
+            检测方式：{{ recognizePreview.metrics?.detection_method || '—' }}
+            · 有效采样 {{ recognizePreview.metrics?.valid_sample_count ?? '—' }} px
+          </div>
+        </div>
+      </div>
+      <div class="recognize-toolbar">
+        <el-checkbox v-model="recognizeSkipQuality">跳过质量检测</el-checkbox>
+        <el-button type="primary" plain :loading="recognizeLoading" @click="runRecognizePreview(false)">
+          自动识别
+        </el-button>
+        <el-button type="warning" plain :disabled="!recognizeManualReady" :loading="recognizeLoading"
+          @click="runRecognizePreview(true)">
+          应用人工调整并识别
+        </el-button>
+        <div style="flex:1"></div>
+        <el-checkbox v-model="recognizeOverwriteRecord">覆盖识别数据</el-checkbox>
+        <el-checkbox v-model="recognizeOverwriteSnapshots">覆盖对比快照</el-checkbox>
+        <el-button type="success" :disabled="!recognizePreview" :loading="recognizeApplying"
+          @click="applyRecognize">
+          应用
+        </el-button>
+      </div>
+    </el-dialog>
+
     <!-- 等级统计 -->
     <el-dialog v-model="statsDialogVisible" title="调色前 / 调色后等级统计" width="960px" top="4vh" destroy-on-close @opened="onStatsDialogOpened">
       <el-tabs v-model="statsMainTab" @tab-change="onStatsTabChange">
@@ -590,7 +709,7 @@
             <el-checkbox-group v-model="statsGroupBy" @change="refreshGradeStats">
               <el-checkbox v-for="dim in statDimOptions" :key="dim.field" :label="dim.field">{{ dim.label }}</el-checkbox>
             </el-checkbox-group>
-            <span class="hint">基于当前表格筛选，共 {{ filteredRecords.length }} 条</span>
+            <span class="hint">基于当前表格筛选，共 {{ filteredRecords.length }} 条（统计时自动排除「不纳入统计」记录）</span>
           </div>
           <div class="stats-table-wrap">
             <el-table :data="statsRows" border stripe size="small" empty-text="无数据或未选择分组维度" max-height="420">
@@ -651,7 +770,7 @@
             </el-select>
             <el-checkbox v-model="statsPctByOperator">按实验人分行</el-checkbox>
             <el-button type="primary" size="small" @click="refreshGradePctStats">重新计算</el-button>
-            <span class="hint">统计全库记录，可按实验人 / 大组 / 小组筛选占比</span>
+            <span class="hint">统计全库记录，可按实验人 / 大组 / 小组筛选；已排除「不纳入统计」记录</span>
           </div>
           <div class="stats-table-wrap">
             <el-table :data="statsPctRows" border stripe size="small" empty-text="请设置筛选条件后点击重新计算" max-height="280">
@@ -699,7 +818,7 @@
         <span style="font-size:12px;color:#475569">小组最少 n：</span>
         <el-input-number v-model="stabilityMinN" :min="2" :max="20" size="small" style="width:88px" />
         <el-button type="primary" size="small" :loading="stabilityLoading" @click="refreshStabilityStats">重新计算</el-button>
-        <span class="hint">统计全库记录，可按实验人 / 大组 / 小组筛选；grade 边界 {{ (stabilityReport.boundaries || []).join(', ') }}</span>
+        <span class="hint">统计全库记录，可按实验人 / 大组 / 小组筛选；已排除「不纳入统计」记录；grade 边界 {{ (stabilityReport.boundaries || []).join(', ') }}</span>
       </div>
       <div v-if="stabilityScatterSummary.n" class="stability-summary">
         有效记录 <strong>{{ stabilityScatterSummary.n }}</strong> 条
@@ -785,10 +904,11 @@
   const EMPTY_MARK = '__EMPTY__';
   const NUM_FIELDS = new Set(['id', 'illuminance', 'lstar_before', 'lstar_after']);
   const GRADE_FIELDS = new Set(['grade_before', 'grade_after']);
-  const BOOL_FIELDS = new Set(['skip_quality', 'manual_adjusted']);
+  const BOOL_FIELDS = new Set(['skip_quality', 'manual_adjusted', 'include_in_stats']);
 
   function displayFilterValue(row, field) {
     const val = row[field];
+    if (field === 'include_in_stats') return (val !== false) ? '是' : '否';
     if (BOOL_FIELDS.has(field)) return val ? '是' : '否';
     return (val === null || val === undefined || val === '') ? EMPTY_MARK : String(val);
   }
@@ -804,6 +924,14 @@
 
   function emptyGradeCounts() {
     return Object.fromEntries(GRADES.map(g => [g, 0]));
+  }
+
+  function isIncludedInStats(row) {
+    return row && row.include_in_stats !== false;
+  }
+
+  function recordsForStats(records) {
+    return (records || []).filter(isIncludedInStats);
   }
 
   function normalizeGradeValue(val) {
@@ -1027,7 +1155,7 @@
     return {
       group_name:'', subgroup_name:'', experiment_date:todayStr(), operator:'', camera_device:'', light_device:'',
       illuminance:undefined, color:'', grade_before:'', lstar_before:undefined, grade_after:'', lstar_after:undefined,
-      skip_quality:false, manual_adjusted:false,
+      skip_quality:false, manual_adjusted:false, include_in_stats:true,
       notes:'', image_rel:'', debug_run_id:'',
     };
   }
@@ -1060,11 +1188,28 @@
       const compareDialogVisible = ref(false);
       const compareLoading = ref(false);
       const compareLoadingId = ref(null);
+      const includeStatsSavingId = ref(null);
       const compareDialog = reactive({
         before_url: '', after_url: '', compare_url: '',
         grade_before: '', grade_after: '', lstar_before: null, lstar_after: null, image_rel: '',
         audit: null,
       });
+      const recognizeDialogVisible = ref(false);
+      const recognizeLoading = ref(false);
+      const recognizeApplying = ref(false);
+      const recognizeTarget = ref(null);
+      const recognizePreview = ref(null);
+      const recognizeSkipQuality = ref(false);
+      const recognizeOverwriteRecord = ref(true);
+      const recognizeOverwriteSnapshots = ref(true);
+      const recognizeCanvasRef = ref(null);
+      const recognizeOverlayUrl = ref('');
+      let recognizeManualState = null;
+      let recognizeManualImage = null;
+      let recognizeManualCtx = null;
+      let recognizeDragMode = null;
+      const recognizeManualReady = ref(false);
+      const recognizeLastManual = ref(false);
       const statsDialogVisible = ref(false);
       const statsMainTab = ref('count');
       const statsGroupBy = ref([...DEFAULT_STAT_GROUP_BY]);
@@ -1272,7 +1417,7 @@
           ElMessage.warning('请至少选择一个分组维度');
           return;
         }
-        const { rows, totals } = computeGradeStats(filteredRecords.value, [...statsGroupBy.value]);
+        const { rows, totals } = computeGradeStats(recordsForStats(filteredRecords.value), [...statsGroupBy.value]);
         statsRows.value = rows;
         statsTotals.total = totals.total;
         Object.assign(statsTotals.before, totals.before);
@@ -1280,7 +1425,7 @@
       }
 
       function statsPctScopeRecords() {
-        let list = allRecords.value;
+        let list = recordsForStats(allRecords.value);
         if (statsPctOperators.value.length) {
           const set = new Set(statsPctOperators.value);
           list = list.filter(r => set.has(r.operator));
@@ -1392,7 +1537,7 @@
       }
 
       function stabilityScopeRecords() {
-        let list = allRecords.value.filter(r => r.lstar_before != null && r.lstar_after != null);
+        let list = recordsForStats(allRecords.value).filter(r => r.lstar_before != null && r.lstar_after != null);
         if (stabilityOperators.value.length) {
           const set = new Set(stabilityOperators.value);
           list = list.filter(r => set.has(r.operator));
@@ -1811,6 +1956,318 @@
         window.open('/debug/img/file?rel=' + encodeURIComponent(rel) + '&key=' + encodeURIComponent(apiKey.value), '_blank');
       }
 
+      function canRecognize(row) {
+        if (!row) return false;
+        return !!(row.image_rel || row.debug_run_id);
+      }
+
+      function paramsFromMetrics(m) {
+        const mp = m?.manual_params;
+        if (mp && mp.center_x != null) {
+          return {
+            center_x: mp.center_x,
+            center_y: mp.center_y,
+            pupil_radius: mp.pupil_radius ?? 5,
+            inner_radius: mp.inner_radius ?? Math.max((mp.pupil_radius ?? 5) * 1.2, 8),
+            outer_radius: mp.outer_radius ?? Math.max((mp.pupil_radius ?? 5) * 2.5, 16),
+          };
+        }
+        return {
+          center_x: m?.pupil_center?.[0] ?? 0,
+          center_y: m?.pupil_center?.[1] ?? 0,
+          pupil_radius: m?.pupil_radius ?? 5,
+          inner_radius: m?.inner_radius ?? Math.max((m?.pupil_radius ?? 5) * 1.2, 8),
+          outer_radius: m?.outer_radius ?? Math.max((m?.pupil_radius ?? 5) * 2.5, 16),
+        };
+      }
+
+      function normalizeRecognizeManualState(canvas) {
+        if (!recognizeManualState || !canvas) return;
+        const minDim = Math.min(canvas.width || 1, canvas.height || 1);
+        recognizeManualState.center_x = Math.max(0, Math.min(canvas.width - 1, recognizeManualState.center_x));
+        recognizeManualState.center_y = Math.max(0, Math.min(canvas.height - 1, recognizeManualState.center_y));
+        recognizeManualState.pupil_radius = Math.max(2, Math.min(recognizeManualState.pupil_radius, minDim * 0.45));
+        recognizeManualState.inner_radius = Math.max(
+          recognizeManualState.pupil_radius + 1,
+          Math.min(recognizeManualState.inner_radius, minDim * 0.48),
+        );
+        recognizeManualState.outer_radius = Math.max(
+          recognizeManualState.inner_radius + 2,
+          Math.min(recognizeManualState.outer_radius, minDim * 0.50),
+        );
+      }
+
+      function drawRecognizeCanvas() {
+        const canvas = recognizeCanvasRef.value;
+        if (!recognizeManualState || !recognizeManualImage?.complete || !canvas || !recognizeManualCtx) return;
+        recognizeManualCtx.clearRect(0, 0, canvas.width, canvas.height);
+        recognizeManualCtx.drawImage(recognizeManualImage, 0, 0);
+        const { center_x: cx, center_y: cy, pupil_radius: pr, inner_radius: ir, outer_radius: or } = recognizeManualState;
+        recognizeManualCtx.lineWidth = Math.max(2, canvas.width / 240);
+        recognizeManualCtx.fillStyle = 'rgba(0, 255, 255, 0.18)';
+        recognizeManualCtx.beginPath();
+        recognizeManualCtx.arc(cx, cy, or, 0, Math.PI * 2);
+        recognizeManualCtx.arc(cx, cy, ir, 0, Math.PI * 2, true);
+        recognizeManualCtx.fill();
+        recognizeManualCtx.strokeStyle = '#2f81f7';
+        recognizeManualCtx.beginPath();
+        recognizeManualCtx.arc(cx, cy, pr, 0, Math.PI * 2);
+        recognizeManualCtx.stroke();
+        recognizeManualCtx.strokeStyle = '#ff4d4f';
+        recognizeManualCtx.beginPath();
+        recognizeManualCtx.arc(cx, cy, ir, 0, Math.PI * 2);
+        recognizeManualCtx.stroke();
+        recognizeManualCtx.strokeStyle = '#3fb950';
+        recognizeManualCtx.beginPath();
+        recognizeManualCtx.arc(cx, cy, or, 0, Math.PI * 2);
+        recognizeManualCtx.stroke();
+        recognizeManualCtx.strokeStyle = '#ff4d4f';
+        recognizeManualCtx.beginPath();
+        recognizeManualCtx.moveTo(cx - 8, cy);
+        recognizeManualCtx.lineTo(cx + 8, cy);
+        recognizeManualCtx.moveTo(cx, cy - 8);
+        recognizeManualCtx.lineTo(cx, cy + 8);
+        recognizeManualCtx.stroke();
+      }
+
+      function recognizeCanvasPoint(event) {
+        const canvas = recognizeCanvasRef.value;
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: (event.clientX - rect.left) * canvas.width / rect.width,
+          y: (event.clientY - rect.top) * canvas.height / rect.height,
+        };
+      }
+
+      function recognizeHitMode(point) {
+        if (!recognizeManualState) return null;
+        const canvas = recognizeCanvasRef.value;
+        const dx = point.x - recognizeManualState.center_x;
+        const dy = point.y - recognizeManualState.center_y;
+        const dist = Math.hypot(dx, dy);
+        const tol = Math.max(8, (canvas?.width || 480) / 80);
+        if (dist < tol) return 'move';
+        if (Math.abs(dist - recognizeManualState.pupil_radius) < tol) return 'pupil_radius';
+        if (Math.abs(dist - recognizeManualState.inner_radius) < tol) return 'inner_radius';
+        if (Math.abs(dist - recognizeManualState.outer_radius) < tol) return 'outer_radius';
+        return null;
+      }
+
+      function setupRecognizeCanvas(metrics, imageBase64) {
+        recognizeManualReady.value = false;
+        if (!imageBase64) return;
+        recognizeManualState = paramsFromMetrics(metrics);
+        recognizeManualImage = new Image();
+        recognizeManualImage.onload = async () => {
+          await nextTick();
+          const canvas = recognizeCanvasRef.value;
+          if (!canvas) return;
+          canvas.width = recognizeManualImage.naturalWidth;
+          canvas.height = recognizeManualImage.naturalHeight;
+          recognizeManualCtx = canvas.getContext('2d');
+          normalizeRecognizeManualState(canvas);
+          drawRecognizeCanvas();
+          recognizeManualReady.value = true;
+        };
+        recognizeManualImage.src = 'data:image/jpeg;base64,' + imageBase64;
+      }
+
+      function onRecognizePointerDown(event) {
+        if (!recognizeManualState) return;
+        recognizeDragMode = recognizeHitMode(recognizeCanvasPoint(event));
+        if (recognizeDragMode) {
+          event.target.style.cursor = 'grabbing';
+          event.target.setPointerCapture(event.pointerId);
+        }
+      }
+
+      function onRecognizePointerMove(event) {
+        const canvas = recognizeCanvasRef.value;
+        if (!recognizeManualState || !canvas) return;
+        if (!recognizeDragMode) {
+          canvas.style.cursor = recognizeHitMode(recognizeCanvasPoint(event)) ? 'grab' : 'default';
+          return;
+        }
+        const point = recognizeCanvasPoint(event);
+        if (recognizeDragMode === 'move') {
+          recognizeManualState.center_x = point.x;
+          recognizeManualState.center_y = point.y;
+        } else {
+          recognizeManualState[recognizeDragMode] = Math.hypot(
+            point.x - recognizeManualState.center_x,
+            point.y - recognizeManualState.center_y,
+          );
+        }
+        normalizeRecognizeManualState(canvas);
+        drawRecognizeCanvas();
+      }
+
+      function onRecognizePointerUp(event) {
+        recognizeDragMode = null;
+        const canvas = recognizeCanvasRef.value;
+        if (canvas) {
+          canvas.style.cursor = 'default';
+          try { canvas.releasePointerCapture(event.pointerId); } catch (_) {}
+        }
+      }
+
+      function onRecognizePointerLeave() {
+        if (!recognizeDragMode && recognizeCanvasRef.value) {
+          recognizeCanvasRef.value.style.cursor = 'default';
+        }
+      }
+
+      function onRecognizeDialogClosed() {
+        recognizeTarget.value = null;
+        recognizePreview.value = null;
+        recognizeOverlayUrl.value = '';
+        recognizeLastManual.value = false;
+        recognizeManualReady.value = false;
+        recognizeManualState = null;
+        recognizeManualImage = null;
+        recognizeManualCtx = null;
+        recognizeDragMode = null;
+      }
+
+      const recognizeDiffRows = computed(() => {
+        const p = recognizePreview.value;
+        if (!p) return [];
+        const cur = p.current_record || {};
+        const prop = p.proposed_record || {};
+        const rows = [
+          { key: 'grade_before', label: '调色前 Grade', current: cur.grade_before || '—', proposed: prop.grade_before || '—' },
+          { key: 'lstar_before', label: '调色前 L*', current: fmtLstar(cur.lstar_before), proposed: fmtLstar(prop.lstar_before) },
+          { key: 'grade_after', label: '调色后 Grade', current: cur.grade_after || '—', proposed: prop.grade_after || '—' },
+          { key: 'lstar_after', label: '调色后 L*', current: fmtLstar(cur.lstar_after), proposed: fmtLstar(prop.lstar_after) },
+          { key: 'color', label: '颜色', current: cur.color || '—', proposed: prop.color || '—' },
+        ];
+        return rows.map(r => ({ ...r, changed: r.current !== r.proposed }));
+      });
+
+      async function openRecognizeDialog(row) {
+        if (!canRecognize(row)) {
+          ElMessage.warning('该记录没有关联原图或 Debug 运行，无法重新识别');
+          return;
+        }
+        recognizeTarget.value = { ...row };
+        recognizeSkipQuality.value = !!row.skip_quality;
+        recognizeOverwriteRecord.value = true;
+        recognizeOverwriteSnapshots.value = true;
+        recognizePreview.value = null;
+        recognizeOverlayUrl.value = '';
+        recognizeDialogVisible.value = true;
+        await nextTick();
+        await runRecognizePreview(false);
+      }
+
+      async function openRecognizeFromForm() {
+        if (!editingId.value) {
+          ElMessage.warning('请先保存记录后再重新识别');
+          return;
+        }
+        await openRecognizeDialog({
+          id: editingId.value,
+          image_rel: form.image_rel,
+          debug_run_id: form.debug_run_id,
+          skip_quality: form.skip_quality,
+          grade_before: form.grade_before,
+          lstar_before: form.lstar_before,
+          grade_after: form.grade_after,
+          lstar_after: form.lstar_after,
+          color: form.color,
+          manual_adjusted: form.manual_adjusted,
+        });
+      }
+
+      async function runRecognizePreview(useManual) {
+        if (!recognizeTarget.value?.id) return;
+        recognizeLastManual.value = !!useManual;
+        recognizeLoading.value = true;
+        try {
+          const body = { skip_quality: recognizeSkipQuality.value };
+          if (useManual && recognizeManualState) {
+            body.manual_params = { ...recognizeManualState };
+          }
+          const data = await apiFetch('/experiments/records/' + recognizeTarget.value.id + '/recognize', {
+            method: 'POST',
+            body,
+          });
+          recognizePreview.value = data;
+          const b64 = data.images_base64?.['00_original'];
+          const overlay = data.images_base64?.['02_iris_ring'];
+          recognizeOverlayUrl.value = overlay ? ('data:image/jpeg;base64,' + overlay) : '';
+          setupRecognizeCanvas(data.metrics, b64);
+          if (data.proposed_record) {
+            recognizeTarget.value = {
+              ...recognizeTarget.value,
+              ...Object.fromEntries(
+                Object.entries(data.current_record || {}).map(([k, v]) => [k, recognizeTarget.value[k] ?? v]),
+              ),
+            };
+          }
+        } catch (e) {
+          ElMessage.error('识别失败：' + compareErrorLabel(e.message));
+        } finally {
+          recognizeLoading.value = false;
+        }
+      }
+
+      async function applyRecognize() {
+        if (!recognizeTarget.value?.id || !recognizePreview.value) return;
+        if (!recognizeOverwriteRecord.value && !recognizeOverwriteSnapshots.value) {
+          ElMessage.warning('请至少选择一项覆盖内容');
+          return;
+        }
+        const changed = recognizeDiffRows.value.some(r => r.changed);
+        if (recognizeOverwriteRecord.value && changed) {
+          try {
+            await ElMessageBox.confirm(
+              '新识别结果与当前记录不同，确定覆盖识别数据？',
+              '确认覆盖',
+              { type: 'warning' },
+            );
+          } catch (e) {
+            if (e === 'cancel' || e === 'close') return;
+          }
+        }
+        recognizeApplying.value = true;
+        try {
+          const body = {
+            overwrite_record: recognizeOverwriteRecord.value,
+            overwrite_snapshots: recognizeOverwriteSnapshots.value,
+            skip_quality: recognizeSkipQuality.value,
+          };
+          if (recognizeLastManual.value && recognizeManualState) {
+            body.manual_params = { ...recognizeManualState };
+          }
+          const data = await apiFetch('/experiments/records/' + recognizeTarget.value.id + '/recognize/apply', {
+            method: 'POST',
+            body,
+          });
+          const updated = data.record;
+          const idx = allRecords.value.findIndex(r => r.id === updated.id);
+          if (idx >= 0) {
+            allRecords.value[idx] = { ...allRecords.value[idx], ...updated, _compare_audit: null };
+          }
+          if (editingId.value === updated.id) {
+            form.grade_before = updated.grade_before || '';
+            form.lstar_before = updated.lstar_before ?? undefined;
+            form.grade_after = updated.grade_after || '';
+            form.lstar_after = updated.lstar_after ?? undefined;
+            form.color = updated.color || '';
+            form.skip_quality = !!updated.skip_quality;
+            form.manual_adjusted = !!updated.manual_adjusted;
+            setEditPreview(updated);
+          }
+          ElMessage.success('已应用重新识别结果');
+          recognizeDialogVisible.value = false;
+        } catch (e) {
+          ElMessage.error('应用失败：' + compareErrorLabel(e.message));
+        } finally {
+          recognizeApplying.value = false;
+        }
+      }
+
       function canCompare(row) {
         if (!row) return false;
         if (row.image_before_rel && row.image_after_rel) return true;
@@ -1870,6 +2327,11 @@
           invalid_image_rel: '图片路径无效',
           invalid_image_format: '图片文件无法读取',
           no_image_source: '该记录未关联原图或 Debug 运行',
+          debug_original_not_found: 'Debug 运行原图不存在',
+          invalid_manual_params: '人工环带参数无效',
+          manual_params_missing_fields: '人工环带参数不完整',
+          manual_params_must_be_numbers: '人工环带参数必须为数字',
+          nothing_to_overwrite: '请至少选择一项覆盖内容',
           quality_check_failed: '图片未通过质量检测（模糊/过曝）',
           no_iris_detected: '未检测到虹膜',
           insufficient_iris_samples: '虹膜有效采样像素不足',
@@ -1882,6 +2344,7 @@
         const map = {
           debug_run: 'Debug 运行复制（与调试台一致）',
           reanalysis: '原图重算（算法相同，当前配置）',
+          reanalysis_from_debug_original: 'Debug 原图重算（当前配置）',
           reanalysis_metrics_only: '原图重算审计（图已存在，补写指标）',
         };
         return map[audit?.source] || audit?.source || '—';
@@ -2153,6 +2616,7 @@
           grade_before: row.grade_before||'', lstar_before: row.lstar_before??undefined,
           grade_after: row.grade_after||'', lstar_after: row.lstar_after??undefined,
           skip_quality: !!row.skip_quality, manual_adjusted: !!row.manual_adjusted,
+          include_in_stats: row.include_in_stats !== false,
           notes: row.notes||'',
           image_rel: row.image_rel||'', debug_run_id: row.debug_run_id||'',
         });
@@ -2170,6 +2634,7 @@
         ['illuminance','lstar_before','lstar_after'].forEach(k => { if (payload[k] === undefined) payload[k] = null; });
         payload.skip_quality = !!payload.skip_quality;
         payload.manual_adjusted = !!payload.manual_adjusted;
+        payload.include_in_stats = !!payload.include_in_stats;
         try {
           const isEdit = !!editingId.value;
           if (isEdit) {
@@ -2197,6 +2662,31 @@
           if (!isEdit) resetAllFilters();
         } catch (e) { ElMessage.error('保存失败：' + e.message); }
         finally { saving.value = false; }
+      }
+
+      async function toggleIncludeInStats(row, include) {
+        const prev = row.include_in_stats !== false;
+        if (prev === include) return;
+        includeStatsSavingId.value = row.id;
+        row.include_in_stats = include;
+        try {
+          const updated = await apiFetch('/experiments/records/' + row.id + '/include-in-stats', {
+            method: 'PATCH',
+            body: { include_in_stats: include },
+          });
+          const idx = allRecords.value.findIndex(r => r.id === row.id);
+          if (idx >= 0) {
+            allRecords.value[idx].include_in_stats = updated.include_in_stats !== false;
+          }
+          if (editingId.value === row.id) {
+            form.include_in_stats = include;
+          }
+        } catch (e) {
+          row.include_in_stats = prev;
+          ElMessage.error('更新纳入统计失败：' + e.message);
+        } finally {
+          includeStatsSavingId.value = null;
+        }
       }
 
       async function deleteOne(row) {
@@ -2255,10 +2745,15 @@
         openGradeStats, refreshGradeStats, gradeShort, gradeCountSum, formatStatDim,
         suggestOperator, suggestCamera, suggestLight, suggestColor, suggestGrade,
         suggestGroupName, suggestSubgroupName, onGroupSubgroupChange,
-        onSelectionChange, fmtLstar, fmtBool, onHeaderSort, onHeaderFilter,
+        onSelectionChange, fmtLstar, fmtBool, toggleIncludeInStats, includeStatsSavingId, onHeaderSort, onHeaderFilter,
         resetAllFilters, loadMore, onPageSizeChange,
         openImportDialog, importFromRun, openDebugUi, openDebugViewer, openImagePreview,
-        canCompare, openCompareDialog, openCompareFromForm, openCompareDialogFromPreview, onPreviewCompareError, onDialogCompareError,
+        canCompare, canRecognize, openCompareDialog, openCompareFromForm, openCompareDialogFromPreview, onPreviewCompareError, onDialogCompareError,
+        recognizeDialogVisible, recognizeLoading, recognizeApplying, recognizeTarget, recognizePreview,
+        recognizeSkipQuality, recognizeOverwriteRecord, recognizeOverwriteSnapshots, recognizeCanvasRef,
+        recognizeOverlayUrl, recognizeManualReady, recognizeDiffRows, openRecognizeDialog, openRecognizeFromForm,
+        runRecognizePreview, applyRecognize, onRecognizePointerDown, onRecognizePointerMove,
+        onRecognizePointerUp, onRecognizePointerLeave, onRecognizeDialogClosed,
         auditSourceLabel, consistencyLabel, fmtLabTriple, compareErrorLabel,
       };
     },

@@ -312,16 +312,193 @@ def _run_analysis_for_compare(
     image_bgr: np.ndarray,
     config: dict,
     config_path: Path,
+    *,
+    skip_quality: Optional[bool] = None,
+    manual_detection: Optional[dict] = None,
+    closeup_mode: str = "auto",
 ):
     """实验对比重算：质量门槛未通过时自动 skip_quality（与 Debug 勾选跳过一致）。"""
     from app.services.pipeline import AnalysisError, run_analysis
 
+    run_kwargs: dict[str, Any] = {
+        "closeup_mode": closeup_mode if closeup_mode in ("auto", "precise", "rough") else "auto",
+    }
+    if manual_detection:
+        run_kwargs["manual_detection"] = manual_detection
+    if skip_quality is True:
+        run_kwargs["skip_quality"] = True
+        return run_analysis(image_bgr, config, config_path, **run_kwargs), True
+
     try:
-        return run_analysis(image_bgr, config, config_path), False
+        if skip_quality is False:
+            run_kwargs["skip_quality"] = False
+        return run_analysis(image_bgr, config, config_path, **run_kwargs), False
     except AnalysisError as exc:
         if exc.code == "quality_check_failed":
-            return run_analysis(image_bgr, config, config_path, skip_quality=True), True
+            run_kwargs["skip_quality"] = True
+            return run_analysis(image_bgr, config, config_path, **run_kwargs), True
         raise ValueError(exc.code) from exc
+
+
+def _parse_manual_params_dict(raw: Any) -> Optional[dict[str, float]]:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("invalid_manual_params")
+    required = ["center_x", "center_y", "pupil_radius", "inner_radius", "outer_radius"]
+    if any(key not in raw for key in required):
+        raise ValueError("manual_params_missing_fields")
+    try:
+        return {key: float(raw[key]) for key in required}
+    except (TypeError, ValueError) as exc:
+        raise ValueError("manual_params_must_be_numbers") from exc
+
+
+def load_record_image_bgr(
+    record: dict,
+    img_root: Path,
+    debug_output_root: Path,
+) -> tuple[np.ndarray, Optional[str]]:
+    """从 image_rel 或 debug run 原图加载 BGR 图像。"""
+    image_rel = record.get("image_rel")
+    if image_rel:
+        rel = (image_rel or "").replace("\\", "/").lstrip("/")
+        if not rel or ".." in rel:
+            raise ValueError("invalid_image_rel")
+        target = (img_root / rel).resolve()
+        root_resolved = img_root.resolve()
+        if not str(target).startswith(str(root_resolved)):
+            raise ValueError("invalid_image_rel")
+        if not target.is_file():
+            raise ValueError("image_not_found")
+        image_bgr = _imread_unicode(target)
+        if image_bgr is None:
+            raise ValueError("invalid_image_format")
+        return image_bgr, rel
+
+    debug_run_id = record.get("debug_run_id")
+    if debug_run_id:
+        if ".." in debug_run_id or "/" in debug_run_id or "\\" in debug_run_id:
+            raise ValueError("invalid_debug_run_id")
+        original_path = debug_output_root / debug_run_id / "00_original.jpg"
+        if not original_path.is_file():
+            raise ValueError("debug_original_not_found")
+        image_bgr = _imread_unicode(original_path)
+        if image_bgr is None:
+            raise ValueError("invalid_image_format")
+        return image_bgr, None
+
+    raise ValueError("no_image_source")
+
+
+def run_record_recognition(
+    image_bgr: np.ndarray,
+    config: dict,
+    config_path: Path,
+    *,
+    image_rel: Optional[str] = None,
+    skip_quality: Optional[bool] = None,
+    manual_detection: Optional[dict] = None,
+    closeup_mode: str = "auto",
+) -> tuple[Any, dict, bool]:
+    """对实验记录关联原图运行识别 pipeline，返回 (pipeline, metrics, skip_quality_used)。"""
+    from app.services.debug_viz import build_debug_metrics
+
+    pipeline, skip_quality_used = _run_analysis_for_compare(
+        image_bgr,
+        config,
+        config_path,
+        skip_quality=skip_quality,
+        manual_detection=manual_detection,
+        closeup_mode=closeup_mode,
+    )
+    highlight_v = int(config.get("highlight_v_threshold", 240))
+    metrics = build_debug_metrics(pipeline, highlight_v, config=config)
+    if image_rel:
+        metrics["source_rel"] = image_rel
+        metrics["image_rel"] = image_rel
+    metrics["skip_quality"] = bool(skip_quality_used if skip_quality is None else skip_quality)
+    return pipeline, metrics, skip_quality_used
+
+
+def build_record_recognition_preview(
+    record: dict,
+    config: dict,
+    config_path: Path,
+    img_root: Path,
+    debug_output_root: Path,
+    *,
+    skip_quality: Optional[bool] = None,
+    manual_params: Any = None,
+    closeup_mode: str = "auto",
+) -> dict[str, Any]:
+    """识别预览：返回 metrics、新旧对比、可视化 base64（不写入 DB）。"""
+    from app.services.debug_viz import build_debug_images, images_to_base64
+
+    image_bgr, image_rel = load_record_image_bgr(record, img_root, debug_output_root)
+    manual_detection = _parse_manual_params_dict(manual_params)
+    if skip_quality is None:
+        skip_quality = bool(record.get("skip_quality"))
+
+    pipeline, metrics, skip_quality_used = run_record_recognition(
+        image_bgr,
+        config,
+        config_path,
+        image_rel=image_rel,
+        skip_quality=skip_quality,
+        manual_detection=manual_detection,
+        closeup_mode=closeup_mode,
+    )
+
+    highlight_v = int(config.get("highlight_v_threshold", 240))
+    eye_cfg = config.get("eye_closeup", {})
+    images = build_debug_images(pipeline, eye_cfg, config=config, highlight_v=highlight_v)
+    preview_images = {
+        "00_original": image_bgr,
+        "02_iris_ring": images.get("02_iris_ring"),
+        "04_valid_samples": images.get("04_valid_samples"),
+    }
+    preview_images = {k: v for k, v in preview_images.items() if v is not None}
+
+    import_payload = metrics_to_import_payload(metrics, record.get("debug_run_id"))
+    current = {
+        "grade_before": record.get("grade_before"),
+        "lstar_before": record.get("lstar_before"),
+        "grade_after": record.get("grade_after"),
+        "lstar_after": record.get("lstar_after"),
+        "color": record.get("color"),
+        "skip_quality": bool(record.get("skip_quality")),
+        "manual_adjusted": bool(record.get("manual_adjusted")),
+    }
+    proposed = {
+        "grade_before": import_payload.get("grade_before"),
+        "lstar_before": import_payload.get("lstar_before"),
+        "grade_after": import_payload.get("grade_after"),
+        "lstar_after": import_payload.get("lstar_after"),
+        "color": import_payload.get("color"),
+        "skip_quality": bool(metrics.get("skip_quality")),
+        "manual_adjusted": bool(metrics.get("manual_adjusted")),
+    }
+    mp = metrics.get("manual_params")
+    if not mp and metrics.get("pupil_center"):
+        mp = {
+            "center_x": metrics["pupil_center"][0],
+            "center_y": metrics["pupil_center"][1],
+            "pupil_radius": metrics.get("pupil_radius"),
+            "inner_radius": metrics.get("inner_radius"),
+            "outer_radius": metrics.get("outer_radius"),
+        }
+
+    return {
+        "metrics": metrics,
+        "import_payload": import_payload,
+        "current_record": current,
+        "proposed_record": proposed,
+        "manual_params": mp,
+        "skip_quality_used": skip_quality_used,
+        "image_rel": image_rel,
+        "images_base64": images_to_base64(preview_images),
+    }
 
 
 def _imread_unicode(path: Path) -> Optional[np.ndarray]:
@@ -334,45 +511,29 @@ def _imread_unicode(path: Path) -> Optional[np.ndarray]:
     return cv2.imdecode(data, cv2.IMREAD_COLOR)
 
 
-def generate_compare_snapshots_from_image_rel(
-    img_root: Path,
+def _generate_compare_snapshots_from_pipeline(
     snapshot_root: Path,
     record_id: int,
-    image_rel: str,
+    pipeline,
+    image_bgr: np.ndarray,
     config: dict,
-    config_path: Path,
+    *,
     record: Optional[dict] = None,
+    skip_quality_used: bool = False,
+    source: str = "reanalysis",
+    debug_run_id: Optional[str] = None,
 ) -> dict[str, Optional[str]]:
-    """对 img/ 原图重新识别，生成并持久化调色前后虹膜裁切图及审计。"""
     from app.services.debug_viz import build_debug_images, build_debug_metrics
-
-    rel = (image_rel or "").replace("\\", "/").lstrip("/")
-    if not rel or ".." in rel:
-        raise ValueError("invalid_image_rel")
-    target = (img_root / rel).resolve()
-    root_resolved = img_root.resolve()
-    if not str(target).startswith(str(root_resolved)):
-        raise ValueError("invalid_image_rel")
-    if not target.is_file():
-        raise ValueError("image_not_found")
-
-    image_bgr = _imread_unicode(target)
-    if image_bgr is None:
-        raise ValueError("invalid_image_format")
-
-    try:
-        pipeline, skip_quality_used = _run_analysis_for_compare(image_bgr, config, config_path)
-    except ValueError as exc:
-        raise ValueError(str(exc)) from exc
 
     highlight_v = int(config.get("highlight_v_threshold", 240))
     eye_cfg = config.get("eye_closeup", {})
     metrics = build_debug_metrics(pipeline, highlight_v, config=config)
     audit = build_compare_audit(
-        source="reanalysis",
+        source=source,
         metrics=metrics,
         config=config,
         record=record,
+        debug_run_id=debug_run_id,
         skip_quality_used=skip_quality_used,
     )
     images = build_debug_images(
@@ -394,6 +555,209 @@ def generate_compare_snapshots_from_image_rel(
             return _write_compare_pair(dest_dir, left, right, record_id, audit=audit)
 
     return {"image_before_rel": None, "image_after_rel": None}
+
+
+def generate_compare_snapshots_from_image_rel(
+    img_root: Path,
+    snapshot_root: Path,
+    record_id: int,
+    image_rel: str,
+    config: dict,
+    config_path: Path,
+    record: Optional[dict] = None,
+    *,
+    skip_quality: Optional[bool] = None,
+    manual_detection: Optional[dict] = None,
+    closeup_mode: str = "auto",
+    force: bool = False,
+) -> dict[str, Optional[str]]:
+    """对 img/ 原图重新识别，生成并持久化调色前后虹膜裁切图及审计。"""
+    if not force and record and record.get("image_before_rel") and record.get("image_after_rel"):
+        return {
+            "image_before_rel": record.get("image_before_rel"),
+            "image_after_rel": record.get("image_after_rel"),
+        }
+
+    rel = (image_rel or "").replace("\\", "/").lstrip("/")
+    if not rel or ".." in rel:
+        raise ValueError("invalid_image_rel")
+    target = (img_root / rel).resolve()
+    root_resolved = img_root.resolve()
+    if not str(target).startswith(str(root_resolved)):
+        raise ValueError("invalid_image_rel")
+    if not target.is_file():
+        raise ValueError("image_not_found")
+
+    image_bgr = _imread_unicode(target)
+    if image_bgr is None:
+        raise ValueError("invalid_image_format")
+
+    if skip_quality is None and record is not None:
+        skip_quality = bool(record.get("skip_quality"))
+
+    try:
+        pipeline, skip_quality_used = _run_analysis_for_compare(
+            image_bgr,
+            config,
+            config_path,
+            skip_quality=skip_quality,
+            manual_detection=manual_detection,
+            closeup_mode=closeup_mode,
+        )
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+
+    return _generate_compare_snapshots_from_pipeline(
+        snapshot_root,
+        record_id,
+        pipeline,
+        image_bgr,
+        config,
+        record=record,
+        skip_quality_used=skip_quality_used,
+        source="reanalysis",
+    )
+
+
+def generate_compare_snapshots_for_record(
+    record: dict,
+    snapshot_root: Path,
+    record_id: int,
+    config: dict,
+    config_path: Path,
+    img_root: Path,
+    debug_output_root: Path,
+    *,
+    skip_quality: Optional[bool] = None,
+    manual_detection: Optional[dict] = None,
+    closeup_mode: str = "auto",
+    force: bool = False,
+) -> dict[str, Optional[str]]:
+    """按实验记录关联原图（image_rel 或 debug run）重算并持久化对比快照。"""
+    if not force and record.get("image_before_rel") and record.get("image_after_rel"):
+        return {
+            "image_before_rel": record.get("image_before_rel"),
+            "image_after_rel": record.get("image_after_rel"),
+        }
+
+    image_bgr, image_rel = load_record_image_bgr(record, img_root, debug_output_root)
+    if skip_quality is None:
+        skip_quality = bool(record.get("skip_quality"))
+
+    try:
+        pipeline, skip_quality_used = _run_analysis_for_compare(
+            image_bgr,
+            config,
+            config_path,
+            skip_quality=skip_quality,
+            manual_detection=manual_detection,
+            closeup_mode=closeup_mode,
+        )
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+
+    source = "reanalysis"
+    debug_run_id = record.get("debug_run_id")
+    if not image_rel:
+        source = "reanalysis_from_debug_original"
+
+    return _generate_compare_snapshots_from_pipeline(
+        snapshot_root,
+        record_id,
+        pipeline,
+        image_bgr,
+        config,
+        record=record,
+        skip_quality_used=skip_quality_used,
+        source=source,
+        debug_run_id=debug_run_id if not image_rel else None,
+    )
+
+
+def apply_record_recognition(
+    record: dict,
+    store,
+    config: dict,
+    config_path: Path,
+    img_root: Path,
+    debug_output_root: Path,
+    snapshot_root: Path,
+    *,
+    overwrite_record: bool,
+    overwrite_snapshots: bool,
+    skip_quality: Optional[bool] = None,
+    manual_params: Any = None,
+    closeup_mode: str = "auto",
+) -> dict[str, Any]:
+    """应用重新识别结果：可选覆盖 DB 字段与对比快照。"""
+    manual_detection = _parse_manual_params_dict(manual_params)
+    if skip_quality is None:
+        skip_quality = bool(record.get("skip_quality"))
+
+    image_bgr, image_rel = load_record_image_bgr(record, img_root, debug_output_root)
+    pipeline, metrics, skip_quality_used = run_record_recognition(
+        image_bgr,
+        config,
+        config_path,
+        image_rel=image_rel or record.get("image_rel"),
+        skip_quality=skip_quality,
+        manual_detection=manual_detection,
+        closeup_mode=closeup_mode,
+    )
+    import_payload = metrics_to_import_payload(metrics, record.get("debug_run_id"))
+    record_id = int(record["id"])
+    updated = dict(record)
+
+    if overwrite_record:
+        patch = {
+            "group_name": record["group_name"],
+            "subgroup_name": record.get("subgroup_name"),
+            "experiment_date": record["experiment_date"],
+            "operator": record["operator"],
+            "camera_device": record.get("camera_device"),
+            "light_device": record.get("light_device"),
+            "illuminance": record.get("illuminance"),
+            "color": import_payload.get("color") or record.get("color"),
+            "grade_before": import_payload.get("grade_before"),
+            "lstar_before": import_payload.get("lstar_before"),
+            "grade_after": import_payload.get("grade_after"),
+            "lstar_after": import_payload.get("lstar_after"),
+            "notes": record.get("notes"),
+            "image_rel": record.get("image_rel"),
+            "debug_run_id": record.get("debug_run_id"),
+            "skip_quality": bool(metrics.get("skip_quality")),
+            "manual_adjusted": bool(metrics.get("manual_adjusted")),
+            "include_in_stats": record.get("include_in_stats", True),
+        }
+        updated = store.update_record(record_id, patch) or updated
+
+    if overwrite_snapshots:
+        paths = _generate_compare_snapshots_from_pipeline(
+            snapshot_root,
+            record_id,
+            pipeline,
+            image_bgr,
+            config,
+            record=updated if overwrite_record else record,
+            skip_quality_used=skip_quality_used,
+            source="reanalysis",
+            debug_run_id=record.get("debug_run_id") if not record.get("image_rel") else None,
+        )
+        if paths.get("image_before_rel"):
+            updated = store.update_record_images(
+                record_id,
+                image_before_rel=paths["image_before_rel"],
+                image_after_rel=paths["image_after_rel"],
+            ) or updated
+
+    return {
+        "record": updated,
+        "metrics": metrics,
+        "import_payload": import_payload,
+        "skip_quality_used": skip_quality_used,
+        "overwritten_record": overwrite_record,
+        "overwritten_snapshots": overwrite_snapshots,
+    }
 
 
 def snapshot_compare_images(

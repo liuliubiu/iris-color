@@ -39,7 +39,7 @@ def _load_records() -> tuple[list, list]:
         cur.execute(
             "SELECT id, group_name, subgroup_name, operator, camera_device, "
             "light_device, illuminance, color, lstar_before, lstar_after, "
-            "grade_before, grade_after FROM experiment_records "
+            "grade_before, grade_after, include_in_stats FROM experiment_records "
             "WHERE lstar_before IS NOT NULL AND lstar_after IS NOT NULL"
         )
         rows = cur.fetchall()
