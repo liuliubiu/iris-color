@@ -19,6 +19,9 @@ from app.services.experiment_debug_import import (
     rebuild_compare_audit,
     snapshot_compare_images,
 )
+from app.services.experiment_stability import analyze_stability
+from app.services.experiment_stability import analyze_stability
+from app.services.experiment_stability import analyze_stability
 from app.services.experiment_store import ExperimentStore, create_experiment_store
 from app.services.pipeline import load_config
 
@@ -434,3 +437,74 @@ def get_experiment_snapshot(
             raise HTTPException(status_code=404, detail="audit_not_found")
         return enrich_audit_with_current_standards(audit, config)
     return FileResponse(path, media_type="image/jpeg")
+
+
+def _grade_boundaries(config: dict) -> list[float]:
+    return (config.get("grade") or {}).get("boundaries", [55, 45, 29, 19])
+
+
+@router.post("/stats/stability")
+def stability_stats(
+    key: str = Query(...),
+    body: dict = Body(default={}),
+):
+    """L* 离散度稳定性分析（支持范围筛选，供管理页图表使用）。"""
+    config = _verify_key(key)
+    store = _get_store(config)
+    records = store.list_records()
+    boundaries = _grade_boundaries(config)
+
+    min_subgroup_n = int(body.get("min_subgroup_n") or 3)
+    min_subgroup_n = max(2, min(min_subgroup_n, 50))
+
+    operators = body.get("operators")
+    if operators is not None and not isinstance(operators, list):
+        raise HTTPException(status_code=400, detail="invalid_operators")
+    group_names = body.get("group_names")
+    if group_names is not None and not isinstance(group_names, list):
+        raise HTTPException(status_code=400, detail="invalid_group_names")
+    record_ids = body.get("record_ids")
+    if record_ids is not None:
+        if not isinstance(record_ids, list):
+            raise HTTPException(status_code=400, detail="invalid_record_ids")
+        try:
+            record_ids = [int(i) for i in record_ids]
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="invalid_record_ids") from exc
+
+    # 与列表页一致的字段筛选（可选）
+    field_filters = {
+        "group_name": body.get("group_name"),
+        "subgroup_name": body.get("subgroup_name"),
+        "date_from": body.get("date_from"),
+        "date_to": body.get("date_to"),
+        "operator": body.get("operator"),
+        "camera_device": body.get("camera_device"),
+        "light_device": body.get("light_device"),
+        "color": body.get("color"),
+        "grade_before": body.get("grade_before"),
+        "grade_after": body.get("grade_after"),
+    }
+    filtered = records
+    for field, val in field_filters.items():
+        if val is None or val == "":
+            continue
+        if field in ("date_from", "date_to"):
+            if field == "date_from":
+                filtered = [r for r in filtered if (r.get("experiment_date") or "") >= str(val)]
+            else:
+                filtered = [r for r in filtered if (r.get("experiment_date") or "") <= str(val)]
+        else:
+            filtered = [r for r in filtered if r.get(field) == val]
+
+    report = analyze_stability(
+        filtered,
+        boundaries,
+        min_subgroup_n=min_subgroup_n,
+        operators=operators or None,
+        group_names=group_names or None,
+        record_ids=record_ids or None,
+    )
+    report["source_count"] = len(records)
+    report["filtered_count"] = len(filtered)
+    return report
