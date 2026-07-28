@@ -7,13 +7,19 @@
 按 人 / 人×设备 / 人×设备×条件 分组统计 L* 的均值/标准差/极差 与 grade 一致率。
 同时汇总巩膜参考 Lab 分布，供标定 target_l。
 
+默认保留旧目录评估；传 --experiments 时以实验记录中 include_in_stats=1 的数据
+为唯一基准，并排除回放基线与数据库 lstar_before 不一致的记录。
+
 用法（在 iris-vision 目录）：
     python scripts/eval_sclera_norm.py [--tag run1] [--save-overlays] [--target-l 75]
         [--set key=value ...]   # 覆盖 sclera_normalization 配置项，如 --set s_max=50
+    python scripts/eval_sclera_norm.py --experiments --tag candidate
+        [--baseline-tolerance 1.0] [--set key=value ...]
 """
 
 import json
 import re
+import sqlite3
 import sys
 import time
 from collections import Counter
@@ -21,6 +27,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pymysql
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -29,11 +36,303 @@ from app.services.color import classify_iris_color, extract_iris_lab_median  # n
 from app.services.debug_viz import build_debug_images  # noqa: E402
 from app.services.grade import get_grade_boundaries, map_l_star_to_grade  # noqa: E402
 from app.services.pipeline import AnalysisError, load_config, run_analysis  # noqa: E402
+from app.services.experiment_stability import analyze_stability  # noqa: E402
 
 IMG_DIR = ROOT.parent / "img"
 OUT_DIR = ROOT / "debug_output" / "_sclera_eval"
 CONFIG_PATH = ROOT / "config" / "grade_thresholds.yaml"
 EXTS = (".jpg", ".jpeg", ".png")
+
+
+def _load_experiment_rows(config: dict) -> list[dict]:
+    """只读加载实验记录；评估脚本绝不覆盖数据库。"""
+    exp_cfg = config.get("experiments") or {}
+    fields = (
+        "id, group_name, subgroup_name, operator, camera_device, light_device, "
+        "illuminance, lstar_before, lstar_after, grade_before, grade_after, "
+        "image_rel, skip_quality, manual_adjusted, include_in_stats"
+    )
+    query = (
+        f"SELECT {fields} FROM experiment_records "
+        "WHERE include_in_stats=1 AND lstar_before IS NOT NULL "
+        "AND lstar_after IS NOT NULL ORDER BY id"
+    )
+    if exp_cfg.get("backend", "sqlite") == "mysql":
+        mysql_cfg = exp_cfg.get("mysql") or {}
+        conn = pymysql.connect(
+            host=mysql_cfg.get("host", "127.0.0.1"),
+            port=int(mysql_cfg.get("port", 3306)),
+            user=mysql_cfg.get("user", "root"),
+            password=str(mysql_cfg.get("password", "")),
+            database=mysql_cfg.get("database", "iris_experiment"),
+            charset=mysql_cfg.get("charset", "utf8mb4"),
+            cursorclass=pymysql.cursors.DictCursor,
+        )
+        try:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                return list(cur.fetchall())
+        finally:
+            conn.close()
+
+    db_path = ROOT / exp_cfg.get("db_path", "data/experiment_records.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute(query).fetchall()]
+    finally:
+        conn.close()
+
+
+def _load_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _manual_params_for_record(
+    record: dict,
+    truth: dict,
+    labels: dict,
+) -> dict | None:
+    """尽量从历史真值恢复人工环带；无法可靠映射时回退自动定位。"""
+    if not record.get("manual_adjusted"):
+        return None
+    rel = (record.get("image_rel") or "").replace("\\", "/")
+    candidates = [rel]
+    label = labels.get(rel) or {}
+    if label.get("previous_rel"):
+        candidates.append(str(label["previous_rel"]).replace("\\", "/"))
+    gt = next((truth.get(key) for key in candidates if truth.get(key)), None)
+    if not gt or not gt.get("iris") or not gt.get("pupil"):
+        return None
+    iris = gt["iris"]
+    pupil = gt["pupil"]
+    iris_r = float(iris["r"])
+    pupil_r = float(pupil["r"])
+    return {
+        "center_x": float(iris["cx"]),
+        "center_y": float(iris["cy"]),
+        "pupil_radius": pupil_r,
+        "inner_radius": max(pupil_r * 1.15, iris_r * 0.35),
+        "outer_radius": iris_r * 0.85,
+    }
+
+
+def _sample_std(values: list[float]) -> float:
+    return float(np.std(np.asarray(values, dtype=np.float64), ddof=1)) if len(values) > 1 else 0.0
+
+
+def _run_experiment_eval(
+    config: dict,
+    *,
+    tag: str,
+    save_overlays: bool,
+    baseline_tolerance: float,
+) -> None:
+    """以实验记录为标准回放当前候选调色，输出同口径稳定性报告。"""
+    boundaries = get_grade_boundaries(config)
+    highlight_v = int(config.get("highlight_v_threshold", 240))
+    eye_cfg = config.get("eye_closeup", {})
+    color_sample_cap = int(eye_cfg.get("color_sample_cap", 20000))
+    truth = _load_json(ROOT / "labels" / "ground_truth.json")
+    labels = _load_json(ROOT / "labels" / "img_labels.json")
+    source_rows = _load_experiment_rows(config)
+    records: list[dict] = []
+    failures: list[dict] = []
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    print(
+        f"source=experiments tag={tag} rows={len(source_rows)} "
+        f"baseline_tolerance={baseline_tolerance:.2f}"
+    )
+    for source in source_rows:
+        rel_text = (source.get("image_rel") or "").replace("\\", "/")
+        path = IMG_DIR / Path(rel_text)
+        if not rel_text or not path.is_file():
+            failures.append({"id": source["id"], "image": rel_text, "error": "image_not_found"})
+            continue
+        image_bgr = _imread_unicode(path)
+        if image_bgr is None:
+            failures.append({"id": source["id"], "image": rel_text, "error": "decode_failed"})
+            continue
+        manual = _manual_params_for_record(source, truth, labels)
+        try:
+            res = run_analysis(
+                image_bgr,
+                config,
+                CONFIG_PATH,
+                # 实验记录已由人工决定纳入统计；回放沿用对比生成逻辑，统一跳过质量门，
+                # 避免把“当时勾选状态”混入候选调色算法比较。
+                skip_quality=True,
+                manual_detection=manual,
+            )
+        except AnalysisError as exc:
+            failures.append({"id": source["id"], "image": rel_text, "error": exc.code})
+            continue
+
+        mad_trim = float(eye_cfg.get("color_trim_mad", 2.5)) if res.scope is not None else 0.0
+        base_lab = extract_iris_lab_median(
+            res.work_image,
+            res.detection.mask,
+            highlight_v,
+            sample_cap=color_sample_cap,
+            masks=res.sampling,
+            mad_trim=mad_trim,
+            channel_gains=None,
+        )
+        stored_l = float(source["lstar_before"])
+        baseline_error = abs(base_lab.L - stored_l)
+        eligible = baseline_error <= baseline_tolerance
+        sclera = res.sclera
+        record = {
+            "id": int(source["id"]),
+            "image": rel_text,
+            "person": source.get("operator"),
+            "device": source.get("camera_device"),
+            "condition": "|".join(str(source.get(k) or "-") for k in ("light_device", "illuminance")),
+            "group_name": source.get("group_name"),
+            "subgroup_name": source.get("subgroup_name"),
+            "operator": source.get("operator"),
+            "camera_device": source.get("camera_device"),
+            "light_device": source.get("light_device"),
+            "illuminance": source.get("illuminance"),
+            "stored_l_before": round(stored_l, 3),
+            "baseline_error": round(baseline_error, 3),
+            "eligible": eligible,
+            "manual_truth_used": manual is not None,
+            "sclera_status": res.sclera_status,
+            "sclera_lab": [round(v, 3) for v in sclera.lab] if sclera and sclera.lab else None,
+            "sclera_pixels": sclera.pixel_count if sclera else 0,
+            "sclera_quality": sclera.quality_score if sclera else 0.0,
+            "side_luminance_gap": sclera.side_luminance_gap if sclera else 0.0,
+            "luminance_mad_ratio": sclera.luminance_mad_ratio if sclera else 0.0,
+            "effective_luminance_strength": (
+                sclera.effective_luminance_strength if sclera else 0.0
+            ),
+            "effective_chroma_strength": sclera.effective_chroma_strength if sclera else 0.0,
+            "camera_profile": sclera.camera_profile if sclera else None,
+            "requested_lstar_delta": sclera.requested_lstar_delta if sclera else 0.0,
+            "gains_limited": bool(sclera.gains_limited) if sclera else False,
+            "gains": [round(float(g), 5) for g in res.sclera_gains]
+            if res.sclera_gains is not None else None,
+            "base_l": round(base_lab.L, 3),
+            "base_ab": [round(base_lab.a, 3), round(base_lab.b, 3)],
+            "base_grade": _grade_of(base_lab.L, boundaries),
+            "base_color": classify_iris_color(base_lab, config).code,
+            "corr_l": round(res.lab.L, 3),
+            "corr_ab": [round(res.lab.a, 3), round(res.lab.b, 3)],
+            "corr_grade": int(res.grade.grade),
+            "corr_color": res.iris_color.code,
+        }
+        records.append(record)
+        if save_overlays:
+            overlays = build_debug_images(
+                res, eye_cfg, config=config, highlight_v=highlight_v
+            )
+            stem = f"{source['id']}__{Path(rel_text).stem}"
+            for key in ("02_iris_ring", "06_sclera_samples"):
+                if key in overlays:
+                    _imwrite_unicode(OUT_DIR / f"{stem}__{key}.jpg", overlays[key])
+
+    eligible_records = [r for r in records if r["eligible"]]
+    analysis_rows = [
+        {
+            "id": r["id"],
+            "operator": r["operator"],
+            "group_name": r["group_name"],
+            "subgroup_name": r["subgroup_name"],
+            "camera_device": r["camera_device"],
+            "light_device": r["light_device"],
+            "illuminance": r["illuminance"],
+            "lstar_before": r["base_l"],
+            "lstar_after": r["corr_l"],
+            "include_in_stats": True,
+        }
+        for r in eligible_records
+    ]
+    stability = analyze_stability(analysis_rows, boundaries)
+    leave_group_out = []
+    group_names = sorted({r["group_name"] for r in eligible_records if r["group_name"]})
+    for held_out in group_names:
+        fold_rows = [r for r in analysis_rows if r["group_name"] != held_out]
+        fold = analyze_stability(fold_rows, boundaries)
+        leave_group_out.append({
+            "held_out_group": held_out,
+            "n": len(fold_rows),
+            "per_person_non_inferior": all(
+                p["std_after"] <= p["std_before"] for p in fold.get("per_person", [])
+            ),
+            "per_person": fold.get("per_person", []),
+        })
+    density = {
+        "n": len(eligible_records),
+        "std_before": round(_sample_std([r["base_l"] for r in eligible_records]), 3),
+        "std_after": round(_sample_std([r["corr_l"] for r in eligible_records]), 3),
+    }
+    acceptance = {
+        "density_non_inferior": density["std_after"] <= density["std_before"],
+        "per_person_non_inferior": all(
+            p["std_after"] <= p["std_before"] for p in stability.get("per_person", [])
+        ),
+        "grade_majority_non_inferior": all(
+            p["majority_after"] >= p["majority_before"]
+            for p in stability.get("per_person", [])
+        ),
+        "within_median_non_inferior": (
+            stability["within_subgroup"]["median_std_after"] is not None
+            and stability["within_subgroup"]["median_std_after"]
+            <= stability["within_subgroup"]["median_std_before"]
+        ),
+        "within_wins_not_less": (
+            stability["within_subgroup"]["wins"] >= stability["within_subgroup"]["losses"]
+        ),
+        "cross_pair_wins_not_less": all(
+            c["improved"] >= c["worsened"] for c in stability.get("cross_condition", [])
+        ),
+        "leave_group_out_passes": sum(
+            int(f["per_person_non_inferior"]) for f in leave_group_out
+        ),
+        "leave_group_out_total": len(leave_group_out),
+        "grade_changes": stability.get("boundary_effect", {}).get("grade_changed", 0),
+    }
+    status_counts = Counter(r["sclera_status"] for r in records)
+    print(
+        f"replayed={len(records)} eligible={len(eligible_records)} failures={len(failures)} "
+        f"density σ {density['std_before']:.3f}->{density['std_after']:.3f}"
+    )
+    for person in stability.get("per_person", []):
+        print(
+            f"{person['operator']}: σ {person['std_before']:.3f}->{person['std_after']:.3f}, "
+            f"grade majority {person['majority_before']:.1%}->{person['majority_after']:.1%}"
+        )
+    ws = stability["within_subgroup"]
+    print(
+        f"within groups: wins={ws['wins']} losses={ws['losses']} "
+        f"median σ {ws['median_std_before']}->{ws['median_std_after']}"
+    )
+    print(f"status={dict(status_counts)} acceptance={acceptance}")
+    out_json = OUT_DIR / f"summary_{tag}.json"
+    out_json.write_text(
+        json.dumps(
+            {
+                "source": "experiments",
+                "config": config.get("sclera_normalization") or {},
+                "density": density,
+                "acceptance": acceptance,
+                "stability": stability,
+                "leave_group_out": leave_group_out,
+                "records": records,
+                "failures": failures,
+                "status_counts": dict(status_counts),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    print(f"detail={out_json}")
 
 
 def _collect_images() -> list:
@@ -150,7 +449,12 @@ def main() -> None:
     args = list(sys.argv[1:])
     tag = "run"
     save_overlays = False
+    experiment_mode = False
+    baseline_tolerance = 1.0
     target_l_override = None
+    if "--experiments" in args:
+        experiment_mode = True
+        args.remove("--experiments")
     if "--tag" in args:
         i = args.index("--tag")
         tag = args[i + 1]
@@ -161,6 +465,10 @@ def main() -> None:
     if "--target-l" in args:
         i = args.index("--target-l")
         target_l_override = float(args[i + 1])
+        del args[i : i + 2]
+    if "--baseline-tolerance" in args:
+        i = args.index("--baseline-tolerance")
+        baseline_tolerance = max(0.0, float(args[i + 1]))
         del args[i : i + 2]
     overrides = {}
     while "--set" in args:
@@ -180,6 +488,14 @@ def main() -> None:
     sclera_cfg.update(overrides)
     if overrides:
         print(f"overrides: {overrides}")
+    if experiment_mode:
+        _run_experiment_eval(
+            config,
+            tag=tag,
+            save_overlays=save_overlays,
+            baseline_tolerance=baseline_tolerance,
+        )
+        return
     boundaries = get_grade_boundaries(config)
     highlight_v = config.get("highlight_v_threshold", 240)
     eye_cfg = config.get("eye_closeup", {})

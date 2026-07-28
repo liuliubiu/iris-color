@@ -6,6 +6,7 @@
 用同一组增益校正虹膜采样像素即可吸收设备间色差与照度差。
 """
 
+import math
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -31,6 +32,41 @@ class ScleraReference:
     mask: Optional[np.ndarray] = None  # 参与统计的像素（uint8，调试用）
     inner_radius: float = 0.0
     outer_radius: float = 0.0
+    quality_score: float = 0.0
+    side_luminance_gap: float = 0.0
+    luminance_mad_ratio: float = 0.0
+    base_luminance_strength: float = 0.0
+    effective_luminance_strength: float = 0.0
+    base_chroma_strength: float = 0.0
+    effective_chroma_strength: float = 0.0
+    gains_limited: bool = False
+    camera_profile: Optional[str] = None
+    requested_lstar_delta: float = 0.0
+
+
+def _reference_quality(
+    *,
+    pixel_count: int,
+    min_pixels: int,
+    clipped_ratio: float,
+    side_luminance_gap: float,
+    luminance_mad_ratio: float,
+    cfg: dict,
+) -> float:
+    """把巩膜参考的空间一致性压缩为 0..1 的可解释质量分。"""
+    pixel_full = max(float(cfg.get("quality_pixel_full_factor", 3.0)), 1.0)
+    pixel_score = float(np.clip(
+        pixel_count / max(min_pixels * pixel_full, 1.0), 0.0, 1.0
+    ))
+    clip_bad = max(float(cfg.get("quality_clip_bad", 0.35)), 1e-6)
+    side_bad = max(float(cfg.get("quality_side_gap_bad", 0.22)), 1e-6)
+    mad_bad = max(float(cfg.get("quality_mad_ratio_bad", 0.12)), 1e-6)
+    clip_score = float(np.clip(1.0 - clipped_ratio / clip_bad, 0.0, 1.0))
+    side_score = float(np.clip(1.0 - side_luminance_gap / side_bad, 0.0, 1.0))
+    mad_score = float(np.clip(1.0 - luminance_mad_ratio / mad_bad, 0.0, 1.0))
+    # 几何平均避免任一噪声源被其它高分完全掩盖，同时保留连续收缩。
+    score = (pixel_score * clip_score * side_score * mad_score) ** 0.25
+    return float(np.clip(score, 0.0, 1.0))
 
 
 def _y_from_l_star(l_star: float) -> float:
@@ -190,6 +226,27 @@ def extract_sclera_reference(
             outer_radius=outer_r,
         )
 
+    # 在亮侧选择/高分位修剪之前评估参考稳定性，避免修剪本身把噪声“美化”。
+    initial_valid_count = valid_count
+    initial_v = v_chan[valid]
+    median_v = float(np.median(initial_v))
+    mad_v = float(np.median(np.abs(initial_v - median_v)))
+    luminance_mad_ratio = 1.4826 * mad_v / max(median_v, 1.0)
+    right_side = np.broadcast_to(dx, valid.shape) >= 0
+    right_valid = valid & right_side
+    left_valid = valid & ~right_side
+    n_right = int(np.count_nonzero(right_valid))
+    n_left = int(np.count_nonzero(left_valid))
+    min_side_quality_pixels = max(
+        int(cfg.get("quality_min_side_pixels", min_pixels // 2)), 20
+    )
+    if n_right >= min_side_quality_pixels and n_left >= min_side_quality_pixels:
+        v_right = float(np.median(v_chan[right_valid]))
+        v_left = float(np.median(v_chan[left_valid]))
+        side_luminance_gap = abs(v_right - v_left) / max((v_right + v_left) * 0.5, 1.0)
+    else:
+        side_luminance_gap = float(cfg.get("quality_missing_side_gap", 0.22))
+
     def _drop_from_valid(keep: np.ndarray) -> None:
         nonlocal valid, valid_count
         ys_v, xs_v = np.nonzero(valid)
@@ -201,7 +258,6 @@ def extract_sclera_reference(
     # 阴影侧会把参考拉低导致虹膜被过度提亮
     side_v_gap = float(cfg.get("side_v_gap", 0.0))
     if side_v_gap > 0 and valid_count >= 100:
-        right_side = np.broadcast_to(dx, valid.shape) >= 0
         right_valid = valid & right_side
         left_valid = valid & ~right_side
         n_right = int(np.count_nonzero(right_valid))
@@ -256,6 +312,14 @@ def extract_sclera_reference(
 
     srgb_median = linear_to_srgb(rgb_linear_median)
     lab = colorspacious.cspace_convert(srgb_median, "sRGB1", "CIELab")
+    quality_score = _reference_quality(
+        pixel_count=initial_valid_count,
+        min_pixels=min_pixels,
+        clipped_ratio=clipped_ratio,
+        side_luminance_gap=side_luminance_gap,
+        luminance_mad_ratio=luminance_mad_ratio,
+        cfg=cfg,
+    )
 
     full_mask = np.zeros((h, w), dtype=np.uint8)
     full_mask[y1:y2, x1:x2][valid] = 255
@@ -270,6 +334,9 @@ def extract_sclera_reference(
         mask=full_mask,
         inner_radius=inner_r,
         outer_radius=outer_r,
+        quality_score=round(quality_score, 4),
+        side_luminance_gap=round(side_luminance_gap, 4),
+        luminance_mad_ratio=round(luminance_mad_ratio, 4),
     )
 
 
@@ -306,16 +373,57 @@ def compute_channel_gains(
     y_sclera = _linear_luminance(rgb)
 
     y_target = _y_from_l_star(float(cfg.get("target_l", 75.0)))
+    base_lum_strength = (
+        float(cfg.get("luminance_strength", 1.0)) if normalize_luminance else 0.0
+    )
+    base_chroma_strength = (
+        float(cfg.get("chroma_strength", 1.0)) if normalize_chroma else 0.0
+    )
+    quality_factor = 1.0
+    if bool(cfg.get("adaptive_strength", False)):
+        min_quality = float(cfg.get("quality_min_apply", 0.15))
+        if reference.quality_score < min_quality:
+            reference.base_luminance_strength = base_lum_strength
+            reference.base_chroma_strength = base_chroma_strength
+            return None, "sclera_low_quality"
+        quality_power = max(float(cfg.get("quality_strength_power", 1.0)), 0.0)
+        quality_floor = float(np.clip(
+            cfg.get("quality_strength_floor", 0.0), 0.0, 1.0
+        ))
+        quality_factor = quality_floor + (1.0 - quality_floor) * (
+            reference.quality_score ** quality_power
+        )
+    effective_lum_strength = base_lum_strength * quality_factor
+    effective_chroma_strength = base_chroma_strength * quality_factor
+    reference.base_luminance_strength = round(base_lum_strength, 4)
+    reference.effective_luminance_strength = round(effective_lum_strength, 4)
+    reference.base_chroma_strength = round(base_chroma_strength, 4)
+    reference.effective_chroma_strength = round(effective_chroma_strength, 4)
 
     # 色度增益：巩膜 → 与自身等亮度的中性灰（不改变整体曝光）
-    chroma_gains = (y_sclera / rgb) if normalize_chroma else np.ones(3, dtype=np.float64)
+    if effective_chroma_strength > 0:
+        chroma_log_error = np.log(y_sclera / rgb)
+        chroma_deadband = max(float(cfg.get("chroma_log_deadband", 0.0)), 0.0)
+        chroma_log_error = np.sign(chroma_log_error) * np.maximum(
+            np.abs(chroma_log_error) - chroma_deadband, 0.0
+        )
+        chroma_gains = np.exp(chroma_log_error * effective_chroma_strength)
+    else:
+        chroma_gains = np.ones(3, dtype=np.float64)
 
     # 亮度增益：strength<1 做部分校正（巩膜受照程度本身有波动，全量校正
     # 会把巩膜采样噪声放大进虹膜 L*）；再截断到合理曝光差范围
     lum_scale = 1.0
-    if normalize_luminance:
-        strength = float(cfg.get("luminance_strength", 1.0))
-        lum_scale = (y_target / y_sclera) ** strength
+    if effective_lum_strength > 0:
+        log_error = math.log(y_target / y_sclera)
+        log_deadband = max(float(cfg.get("luminance_log_deadband", 0.0)), 0.0)
+        if abs(log_error) <= log_deadband:
+            corrected_log_error = 0.0
+        else:
+            corrected_log_error = math.copysign(
+                abs(log_error) - log_deadband, log_error
+            )
+        lum_scale = math.exp(corrected_log_error * effective_lum_strength)
         lum_scale = float(np.clip(
             lum_scale,
             float(cfg.get("lum_gain_min", 0.5)),
@@ -323,6 +431,12 @@ def compute_channel_gains(
         ))
 
     gains = chroma_gains * lum_scale
+    max_gain_ratio = float(cfg.get("max_gain_ratio", 0.0))
+    if max_gain_ratio > 1.0:
+        log_limit = math.log(max_gain_ratio)
+        limited = np.exp(np.clip(np.log(gains), -log_limit, log_limit))
+        reference.gains_limited = not np.allclose(limited, gains, rtol=0.0, atol=1e-12)
+        gains = limited
 
     gain_min = float(cfg.get("gain_min", 0.25))
     gain_max = float(cfg.get("gain_max", 4.0))
@@ -330,3 +444,48 @@ def compute_channel_gains(
         return None, "gain_out_of_range"
 
     return gains.astype(np.float64), "ok"
+
+
+def compute_profile_lstar_delta(
+    reference: ScleraReference,
+    image_shape: tuple[int, ...],
+    cfg: dict,
+) -> tuple[float, Optional[str]]:
+    """按原图尺寸选择设备标定曲线，由巩膜 L* 计算虹膜目标 L* 位移。"""
+    profile_cfg = cfg.get("device_luminance_profiles") or {}
+    if not profile_cfg.get("enabled", False) or not reference.ok or reference.lab is None:
+        return 0.0, None
+    if len(image_shape) < 2:
+        return 0.0, None
+    h, w = int(image_shape[0]), int(image_shape[1])
+    actual = tuple(sorted((w, h)))
+    matched_name = None
+    matched = None
+    for name, profile in (profile_cfg.get("profiles") or {}).items():
+        for dims in profile.get("dimensions") or []:
+            if len(dims) == 2 and tuple(sorted((int(dims[0]), int(dims[1])))) == actual:
+                matched_name = str(name)
+                matched = profile
+                break
+        if matched is not None:
+            break
+    if matched is None:
+        return 0.0, None
+
+    min_quality = float(profile_cfg.get("quality_min_apply", 0.1))
+    if reference.quality_score < min_quality:
+        return 0.0, matched_name
+    target_l = float(matched.get("sclera_target_l"))
+    beta = float(matched.get("iris_l_per_sclera_l", 0.0))
+    quality_power = max(float(profile_cfg.get("quality_power", 1.0)), 0.0)
+    quality_factor = reference.quality_score ** quality_power
+    device_offset = float(matched.get("iris_lstar_offset", 0.0))
+    delta = (
+        -beta * (float(reference.lab[0]) - target_l) * quality_factor
+        + device_offset
+    )
+    cap = max(float(profile_cfg.get("delta_lstar_max", 1.0)), 0.0)
+    delta = float(np.clip(delta, -cap, cap))
+    reference.camera_profile = matched_name
+    reference.requested_lstar_delta = round(delta, 4)
+    return delta, matched_name

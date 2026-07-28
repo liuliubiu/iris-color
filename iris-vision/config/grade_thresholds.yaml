@@ -22,7 +22,8 @@ color_classification:
 # 吸收不同手机白平衡/对焦/照度导致的整图色偏与曝光偏移（提升同人跨条件一致性）。
 # 巩膜采样失败（过曝/像素不足）时自动回退原始取色，不影响主流程。
 sclera_normalization:
-  enabled: true              # 已按 0716/0721 数据集标定（scripts/eval_sclera_norm.py）
+  enabled: true
+  algorithm_version: adaptive-v3-device-profile
   # ---- 采样几何：虹膜外径的倍数环带，只取左右楔形（上下是眼皮/睫毛）----
   ring_inner_scale: 1.10
   ring_outer_scale: 1.60
@@ -42,12 +43,45 @@ sclera_normalization:
                              # 与虹膜受到的照明对应，阴影里的巩膜会引入增益噪声；0=关闭
   mad_trim: 2.5              # 按 V 中位数 ± N×MAD 修剪残余阴影/亮斑；0=关闭
   # ---- 校正目标 ----
-  target_l: 88.0             # 校正后巩膜目标 L*（取数据集巩膜 L* 中位数标定）
-  normalize_luminance: true  # 归一曝光（对 grade 稳定性贡献最大）
+  target_l: 88.0             # 保留作离线实验参数；当前生产配置不做亮度拉伸
+  normalize_luminance: false # 当前实验记录显示巩膜亮度归一会放大同人 L* 离散度
   normalize_chroma: true     # 归一色偏（稳定蓝/绿/棕分类）
-  luminance_strength: 0.6    # 亮度校正强度：1=全量校正到 target_l，0.5=校正一半
-                             # （巩膜受照本身有波动，部分校正可少放大巩膜采样噪声；
-                             # 0716/0721 数据集上 0.6 综合最优：σL 收窄且 grade 不翻转）
+  luminance_strength: 0.0
+  chroma_strength: 0.6       # 提高可见色偏校正；下项保证其不改变虹膜线性亮度
+  preserve_iris_luminance_during_chroma: true
+  luminance_log_deadband: 0.05
+  chroma_log_deadband: 0.0
+  # ---- 参考可靠性与自适应收缩 ----
+  adaptive_strength: true
+  quality_min_apply: 0.10    # 低于此质量分直接回退原始取色
+  quality_strength_floor: 0.05
+  quality_strength_power: 1.0
+  quality_pixel_full_factor: 2.0
+  quality_min_side_pixels: 250
+  quality_missing_side_gap: 0.22
+  quality_clip_bad: 0.50
+  quality_side_gap_bad: 0.40
+  quality_mad_ratio_bad: 0.30
+  max_gain_ratio: 1.12       # 对数域对称限幅：[1/1.12, 1.12]
+  # ---- 设备级巩膜亮度标定 ----
+  # 两台设备的“巩膜 L* → 虹膜 L*”关系方向相反，不能再共用同一个亮度增益。
+  # 原图尺寸用于匹配当前实验设备；未知尺寸不做亮度移动，仅保留上面的色偏校正。
+  device_luminance_profiles:
+    enabled: true
+    quality_min_apply: 0.10
+    quality_power: 1.0
+    delta_lstar_max: 1.0
+    profiles:
+      honor70:
+        dimensions: [[1440, 1920], [3072, 4096]]
+        sclera_target_l: 93.51
+        iris_l_per_sclera_l: 0.35
+        iris_lstar_offset: -1.0
+      iphone15plus:
+        dimensions: [[4284, 5712]]
+        sclera_target_l: 91.87
+        iris_l_per_sclera_l: -0.30
+        iris_lstar_offset: 0.10
   lum_gain_min: 0.5          # 亮度增益截断范围（防止极端巩膜值导致过度提亮/压暗）
   lum_gain_max: 2.0
   gain_min: 0.25             # 增益超出此区间视为参考不可靠，放弃校正

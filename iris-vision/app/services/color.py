@@ -85,6 +85,19 @@ def linear_to_srgb(c: np.ndarray) -> np.ndarray:
     return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1.0 / 2.4) - 0.055)
 
 
+def _relative_y(rgb_linear: np.ndarray) -> np.ndarray:
+    return (
+        0.2126 * rgb_linear[..., 0]
+        + 0.7152 * rgb_linear[..., 1]
+        + 0.0722 * rgb_linear[..., 2]
+    )
+
+
+def _y_from_l_star(l_star: float) -> float:
+    fy = (float(l_star) + 16.0) / 116.0
+    return fy ** 3 if fy ** 3 > 0.008856 else float(l_star) / 903.3
+
+
 def compute_sampling_masks(
     image_bgr: np.ndarray,
     mask: np.ndarray,
@@ -166,6 +179,8 @@ def extract_iris_lab_median(
     mad_trim: float = 0.0,
     channel_gains: Optional[np.ndarray] = None,
     black_offset: Optional[np.ndarray] = None,
+    preserve_luminance: bool = False,
+    lstar_delta: float = 0.0,
 ) -> LabResult:
     """在 mask 区域内取色，剔除高光，返回 CIELAB 中位数。
 
@@ -177,6 +192,8 @@ def extract_iris_lab_median(
     channel_gains 非空时对采样像素做线性 RGB 仿射校正（巩膜参考归一化）：
     sRGB→线性→减 black_offset（雾状眩光/底噪）→逐通道乘增益→clip→回 sRGB，
     再转 CIELAB。
+    preserve_luminance=true 时，色度增益后逐像素恢复原线性 Y，避免白平衡间接扰动 L*。
+    lstar_delta 用设备级巩膜标定给出目标 L* 位移，在同一批采样像素上换算为亮度比例。
     """
     if masks is None:
         masks = compute_sampling_masks(image_bgr, mask, highlight_v_threshold)
@@ -192,13 +209,31 @@ def extract_iris_lab_median(
         pixels_bgr = pixels_bgr[idx]
 
     pixels_rgb = pixels_bgr[:, ::-1].astype(np.float64) / 255.0
-    if channel_gains is not None:
+    corrected_linear = None
+    if channel_gains is not None or abs(float(lstar_delta)) > 1e-9:
         linear = srgb_to_linear(pixels_rgb)
+        original_linear = linear.copy()
         if black_offset is not None:
             linear = linear - np.asarray(black_offset, dtype=np.float64)
-        linear = np.clip(linear * np.asarray(channel_gains, dtype=np.float64), 0.0, 1.0)
-        pixels_rgb = linear_to_srgb(linear)
+            original_linear = original_linear - np.asarray(black_offset, dtype=np.float64)
+        if channel_gains is not None:
+            linear = linear * np.asarray(channel_gains, dtype=np.float64)
+        if preserve_luminance and channel_gains is not None:
+            original_y = _relative_y(np.clip(original_linear, 0.0, None))
+            corrected_y = _relative_y(np.clip(linear, 0.0, None))
+            y_scale = original_y / np.maximum(corrected_y, 1e-9)
+            linear = linear * y_scale[:, None]
+        corrected_linear = np.clip(linear, 0.0, 1.0)
+        pixels_rgb = linear_to_srgb(corrected_linear)
     lab_array = colorspacious.cspace_convert(pixels_rgb, "sRGB1", "CIELab")
+
+    if abs(float(lstar_delta)) > 1e-9 and corrected_linear is not None:
+        median_l = float(np.median(lab_array[:, 0]))
+        target_l = float(np.clip(median_l + float(lstar_delta), 0.0, 100.0))
+        y_scale = _y_from_l_star(target_l) / max(_y_from_l_star(median_l), 1e-9)
+        corrected_linear = np.clip(corrected_linear * y_scale, 0.0, 1.0)
+        pixels_rgb = linear_to_srgb(corrected_linear)
+        lab_array = colorspacious.cspace_convert(pixels_rgb, "sRGB1", "CIELab")
 
     if mad_trim > 0 and len(lab_array) >= 100:
         l_channel = lab_array[:, 0]

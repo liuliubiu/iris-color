@@ -217,6 +217,28 @@ def draw_sclera_samples(
             line += f" gains=({g[0]:.3f}, {g[1]:.3f}, {g[2]:.3f})"
         cv2.putText(out, line, (12, 54),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(
+            out,
+            f"quality={sclera.quality_score:.2f} side_gap={sclera.side_luminance_gap:.3f} "
+            f"mad={sclera.luminance_mad_ratio:.3f}",
+            (12, 80),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        if sclera.camera_profile:
+            cv2.putText(
+                out,
+                f"profile={sclera.camera_profile} requested dL={sclera.requested_lstar_delta:+.2f}",
+                (12, 106),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
     return out
 
 
@@ -311,6 +333,9 @@ def compute_color_correction_compare(
 
     sclera = pipeline.sclera
     return {
+        "algorithm_version": (
+            (cfg.get("sclera_normalization") or {}).get("algorithm_version", "legacy")
+        ),
         "applied": applied,
         "status": pipeline.sclera_status,
         "before": before,
@@ -332,17 +357,70 @@ def compute_color_correction_compare(
         }
         if sclera is not None and sclera.lab is not None
         else None,
+        "reference_quality": {
+            "score": round(sclera.quality_score, 4),
+            "side_luminance_gap": round(sclera.side_luminance_gap, 4),
+            "luminance_mad_ratio": round(sclera.luminance_mad_ratio, 4),
+        } if sclera is not None else None,
+        "strength": {
+            "luminance_base": round(sclera.base_luminance_strength, 4),
+            "luminance_effective": round(sclera.effective_luminance_strength, 4),
+            "chroma_base": round(sclera.base_chroma_strength, 4),
+            "chroma_effective": round(sclera.effective_chroma_strength, 4),
+        } if sclera is not None else None,
+        "gains_limited": bool(sclera.gains_limited) if sclera is not None else False,
+        "preserve_luminance": bool(
+            (cfg.get("sclera_normalization") or {}).get(
+                "preserve_iris_luminance_during_chroma", False
+            )
+        ),
+        "camera_profile": sclera.camera_profile if sclera is not None else None,
+        "requested_lstar_delta": (
+            round(sclera.requested_lstar_delta, 4) if sclera is not None else 0.0
+        ),
     }
 
 
 def _apply_gains_bgr(
     image_bgr: np.ndarray,
     gains: np.ndarray,
+    black_offset: Optional[np.ndarray] = None,
+    preserve_luminance: bool = False,
+    lstar_delta: float = 0.0,
 ) -> np.ndarray:
-    """整图线性 RGB 对角增益（仅可视化；与取色路径一致，不含瞳孔黑偏置）。"""
+    """整图线性 RGB 仿射校正（仅可视化；与取色路径一致）。"""
     rgb = image_bgr[:, :, ::-1].astype(np.float64) / 255.0
     linear = srgb_to_linear(rgb)
+    original_linear = linear.copy()
+    if black_offset is not None:
+        linear = linear - np.asarray(black_offset, dtype=np.float64).reshape(1, 1, 3)
+        original_linear = original_linear - np.asarray(
+            black_offset, dtype=np.float64
+        ).reshape(1, 1, 3)
     linear = np.clip(linear * np.asarray(gains, dtype=np.float64).reshape(1, 1, 3), 0.0, 1.0)
+    if preserve_luminance:
+        original_y = (
+            0.2126 * original_linear[:, :, 0]
+            + 0.7152 * original_linear[:, :, 1]
+            + 0.0722 * original_linear[:, :, 2]
+        )
+        corrected_y = (
+            0.2126 * linear[:, :, 0]
+            + 0.7152 * linear[:, :, 1]
+            + 0.0722 * linear[:, :, 2]
+        )
+        linear = np.clip(
+            linear * (original_y / np.maximum(corrected_y, 1e-9))[:, :, None],
+            0.0,
+            1.0,
+        )
+    if abs(float(lstar_delta)) > 1e-9:
+        # 调试整图使用虹膜常见 L*=58 近似换算；数值识别路径在采样像素上精确换算。
+        linear = np.clip(
+            linear * np.exp(float(lstar_delta) * 3.0 / (58.0 + 16.0)),
+            0.0,
+            1.0,
+        )
     srgb = linear_to_srgb(linear)
     return (np.clip(srgb[:, :, ::-1], 0.0, 1.0) * 255.0).astype(np.uint8)
 
@@ -416,7 +494,13 @@ def draw_sclera_before_after(
     """
     before_img = pipeline.work_image
     if compare.get("applied") and pipeline.sclera_gains is not None:
-        after_img = _apply_gains_bgr(pipeline.work_image, pipeline.sclera_gains)
+        after_img = _apply_gains_bgr(
+            pipeline.work_image,
+            pipeline.sclera_gains,
+            pipeline.sclera_black_offset,
+            preserve_luminance=bool(compare.get("preserve_luminance")),
+            lstar_delta=float(compare.get("requested_lstar_delta") or 0.0),
+        )
     else:
         after_img = before_img
 
@@ -448,6 +532,10 @@ def draw_sclera_before_after(
     if sclera_lab is not None:
         parts.append(
             f"sclera Lab=({sclera_lab['L']:.1f}, {sclera_lab['a']:.1f}, {sclera_lab['b']:.1f})"
+        )
+    if compare.get("camera_profile"):
+        parts.append(
+            f"profile={compare['camera_profile']} dL={compare.get('requested_lstar_delta', 0):+.2f}"
         )
     if parts:
         cv2.putText(
@@ -508,7 +596,13 @@ def build_debug_images(
     images["07_sclera_before_after"] = draw_sclera_before_after(pipeline, compare)
     before_img = pipeline.work_image
     if compare.get("applied") and pipeline.sclera_gains is not None:
-        after_img = _apply_gains_bgr(pipeline.work_image, pipeline.sclera_gains)
+        after_img = _apply_gains_bgr(
+            pipeline.work_image,
+            pipeline.sclera_gains,
+            pipeline.sclera_black_offset,
+            preserve_luminance=bool(compare.get("preserve_luminance")),
+            lstar_delta=float(compare.get("requested_lstar_delta") or 0.0),
+        )
     else:
         after_img = before_img
     images["08_iris_before"] = _iris_crop(before_img, pipeline)
@@ -589,6 +683,11 @@ def build_debug_metrics(
         "grade": pipeline.grade.grade,
         "confidence": pipeline.grade.confidence,
         "sclera_normalization": {
+            "algorithm_version": (
+                ((config or {}).get("sclera_normalization") or {}).get(
+                    "algorithm_version", "legacy"
+                )
+            ),
             "status": pipeline.sclera_status,
             "applied": pipeline.sclera_status == "applied",
             "lab": {
@@ -600,6 +699,39 @@ def build_debug_metrics(
             if pipeline.sclera_gains is not None else None,
             "pixel_count": pipeline.sclera.pixel_count if pipeline.sclera is not None else 0,
             "clipped_ratio": pipeline.sclera.clipped_ratio if pipeline.sclera is not None else 0.0,
+            "quality_score": pipeline.sclera.quality_score if pipeline.sclera is not None else 0.0,
+            "side_luminance_gap": (
+                pipeline.sclera.side_luminance_gap if pipeline.sclera is not None else 0.0
+            ),
+            "luminance_mad_ratio": (
+                pipeline.sclera.luminance_mad_ratio if pipeline.sclera is not None else 0.0
+            ),
+            "base_luminance_strength": (
+                pipeline.sclera.base_luminance_strength if pipeline.sclera is not None else 0.0
+            ),
+            "effective_luminance_strength": (
+                pipeline.sclera.effective_luminance_strength if pipeline.sclera is not None else 0.0
+            ),
+            "base_chroma_strength": (
+                pipeline.sclera.base_chroma_strength if pipeline.sclera is not None else 0.0
+            ),
+            "effective_chroma_strength": (
+                pipeline.sclera.effective_chroma_strength if pipeline.sclera is not None else 0.0
+            ),
+            "gains_limited": (
+                bool(pipeline.sclera.gains_limited) if pipeline.sclera is not None else False
+            ),
+            "camera_profile": (
+                pipeline.sclera.camera_profile if pipeline.sclera is not None else None
+            ),
+            "requested_lstar_delta": (
+                pipeline.sclera.requested_lstar_delta if pipeline.sclera is not None else 0.0
+            ),
+            "preserve_luminance": bool(
+                ((config or {}).get("sclera_normalization") or {}).get(
+                    "preserve_iris_luminance_during_chroma", False
+                )
+            ),
         },
         "color_correction": compare,
     }

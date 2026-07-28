@@ -144,11 +144,21 @@ def _standards_snapshot(config: dict) -> dict[str, Any]:
     grade = config.get("grade", {}) or {}
     return {
         "grade_boundaries": grade.get("boundaries"),
+        "sclera_algorithm_version": sn.get("algorithm_version", "legacy"),
         "sclera_enabled": bool(sn.get("enabled", False)),
         "sclera_target_l": sn.get("target_l"),
         "sclera_normalize_luminance": sn.get("normalize_luminance"),
         "sclera_normalize_chroma": sn.get("normalize_chroma"),
         "sclera_luminance_strength": sn.get("luminance_strength"),
+        "sclera_chroma_strength": sn.get("chroma_strength"),
+        "sclera_adaptive_strength": sn.get("adaptive_strength"),
+        "sclera_quality_min_apply": sn.get("quality_min_apply"),
+        "sclera_quality_strength_power": sn.get("quality_strength_power"),
+        "sclera_luminance_log_deadband": sn.get("luminance_log_deadband"),
+        "sclera_chroma_log_deadband": sn.get("chroma_log_deadband"),
+        "sclera_max_gain_ratio": sn.get("max_gain_ratio"),
+        "sclera_preserve_luminance": sn.get("preserve_iris_luminance_during_chroma"),
+        "sclera_device_luminance_profiles": sn.get("device_luminance_profiles"),
     }
 
 

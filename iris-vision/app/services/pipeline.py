@@ -26,6 +26,7 @@ from app.services.quality import QualityResult, check_quality
 from app.services.sclera import (
     ScleraReference,
     compute_channel_gains,
+    compute_profile_lstar_delta,
     extract_pupil_black_offset,
     extract_sclera_reference,
 )
@@ -48,6 +49,7 @@ class AnalysisPipelineResult:
     scope: Optional[ScopeField] = None
     sclera: Optional[ScleraReference] = None
     sclera_gains: Optional[np.ndarray] = None
+    sclera_black_offset: Optional[np.ndarray] = None
     sclera_status: str = "disabled"
 
 
@@ -94,6 +96,7 @@ def run_analysis(
     eye_closeup_cfg = config.get("eye_closeup", {})
     highlight_v = config.get("highlight_v_threshold", 240)
     detection_mode = "eye_closeup"
+    original_shape = image_bgr.shape
 
     # 镜筒特写：裁掉黑边并统一工作分辨率；普通图仅按需降采样
     pre = preprocess_capture(image_bgr, eye_closeup_cfg)
@@ -163,6 +166,7 @@ def run_analysis(
     sclera_ref: Optional[ScleraReference] = None
     sclera_gains: Optional[np.ndarray] = None
     black_offset: Optional[np.ndarray] = None
+    sclera_lstar_delta = 0.0
     sclera_status = "disabled"
     if sclera_cfg.get("enabled", False):
         sclera_ref = extract_sclera_reference(work, detection, scope, sclera_cfg)
@@ -172,6 +176,10 @@ def run_analysis(
             sclera_gains, gain_status = compute_channel_gains(
                 sclera_ref, sclera_cfg, black_offset=black_offset
             )
+            if sclera_gains is not None:
+                sclera_lstar_delta, _ = compute_profile_lstar_delta(
+                    sclera_ref, original_shape, sclera_cfg
+                )
             sclera_status = "applied" if sclera_gains is not None else gain_status
         else:
             sclera_status = sclera_ref.reason
@@ -188,6 +196,10 @@ def run_analysis(
         mad_trim=mad_trim,
         channel_gains=sclera_gains,
         black_offset=black_offset if sclera_gains is not None else None,
+        preserve_luminance=bool(
+            sclera_cfg.get("preserve_iris_luminance_during_chroma", False)
+        ),
+        lstar_delta=sclera_lstar_delta,
     )
     grade = grade_from_l_star(lab.L, config_path)
     iris_color = classify_iris_color(lab, config)
@@ -205,5 +217,6 @@ def run_analysis(
         scope=scope,
         sclera=sclera_ref,
         sclera_gains=sclera_gains,
+        sclera_black_offset=black_offset if sclera_gains is not None else None,
         sclera_status=sclera_status,
     )
