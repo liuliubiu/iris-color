@@ -1,9 +1,10 @@
 """实验记录管理 API（本地开发用，需 experiments.enabled=true）。"""
 
+import re
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 
 from app.services.experiment_debug_import import (
@@ -574,6 +575,89 @@ def meta_options(key: str = Query(...), table_set: str = Query("prod")):
     ts = _parse_table_set(table_set)
     store = _get_store(config, ts)
     return store.get_distinct_options()
+
+
+@router.get("/meta/img-list")
+def experiment_img_list(key: str = Query(...)):
+    """列出 img/ 下全部图片，供实验记录更改原图路径。"""
+    _verify_key(key)
+    from app.api.debug_routes import _list_img_files, _parse_label_prefix
+
+    images = []
+    for rel in _list_img_files():
+        name = Path(rel).name
+        parsed = _parse_label_prefix(name)
+        images.append({"rel": rel, "name": name, **parsed})
+    return {"images": images, "count": len(images)}
+
+
+@router.get("/meta/check-image")
+def check_image_rel(key: str = Query(...), rel: str = Query(...)):
+    """检查 image_rel 是否指向 img/ 内存在的文件。"""
+    _verify_key(key)
+    from app.api.debug_routes import _safe_img_rel
+
+    rel_norm = (rel or "").replace("\\", "/").lstrip("/")
+    if not rel_norm or ".." in rel_norm:
+        return {"ok": False, "rel": rel_norm or rel}
+    try:
+        path = _safe_img_rel(rel_norm)
+        ok = path.is_file()
+    except HTTPException:
+        ok = False
+    return {"ok": ok, "rel": rel_norm}
+
+
+@router.get("/meta/img-file")
+def experiment_img_file(key: str = Query(...), rel: str = Query(...)):
+    """读取 img/ 内图片（实验管理页预览，使用 experiments API Key）。"""
+    _verify_key(key)
+    from app.api.debug_routes import _safe_img_rel
+
+    path = _safe_img_rel(rel)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="image_not_found")
+    return FileResponse(path)
+
+
+@router.post("/meta/upload-image")
+async def upload_experiment_image(
+    key: str = Query(...),
+    file: UploadFile = File(...),
+):
+    """上传图片到 img/ 目录，返回相对路径供实验记录关联。"""
+    _verify_key(key)
+    from app.api.debug_routes import IMG_EXTS, IMG_ROOT
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="missing_filename")
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in IMG_EXTS:
+        raise HTTPException(status_code=400, detail="invalid_image_format")
+
+    raw_name = Path(file.filename).name
+    safe_name = re.sub(r"[^\w.\-()\u4e00-\u9fff]", "_", raw_name).strip("._")
+    if not safe_name or safe_name in (".", ".."):
+        raise HTTPException(status_code=400, detail="invalid_filename")
+
+    IMG_ROOT.mkdir(parents=True, exist_ok=True)
+    dest = IMG_ROOT / safe_name
+    if dest.exists():
+        stem, suffix = dest.stem, dest.suffix
+        for i in range(1, 1000):
+            candidate = IMG_ROOT / f"{stem}_{i}{suffix}"
+            if not candidate.exists():
+                dest = candidate
+                break
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="empty_file")
+    dest.write_bytes(content)
+
+    rel = dest.relative_to(IMG_ROOT.resolve()).as_posix()
+    return {"ok": True, "rel": rel, "name": dest.name}
 
 
 @router.get("/meta/suggest-names")

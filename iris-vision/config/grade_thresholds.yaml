@@ -70,7 +70,7 @@ sclera_normalization:
     enabled: true
     quality_min_apply: 0.10
     quality_power: 1.0
-    delta_lstar_max: 1.0
+    delta_lstar_max: 5.0
     profiles:
       honor70:
         dimensions: [[1440, 1920], [3072, 4096]]

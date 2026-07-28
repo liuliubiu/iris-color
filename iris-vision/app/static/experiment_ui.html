@@ -179,6 +179,29 @@
   .bulk-progress-list { max-height: 280px; overflow-y: auto; font-size: 12px; line-height: 1.7; }
   .bulk-progress-list .ok { color: #15803d; }
   .bulk-progress-list .fail { color: #b91c1c; }
+  .form-hint.warn { color: #b45309; }
+  .form-hint.err { color: #b91c1c; }
+  .form-hint.ok { color: #15803d; }
+  .img-picker-toolbar { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center; }
+  .img-picker-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:10px; max-height:52vh; overflow-y:auto; }
+  .img-picker-card {
+    border:1px solid #e5e7eb; border-radius:8px; overflow:hidden; cursor:pointer; background:#fff;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .img-picker-card:hover, .img-picker-card.active { border-color:#409eff; box-shadow:0 2px 8px rgba(64,158,255,.15); }
+  .img-picker-card img { width:100%; height:96px; object-fit:cover; background:#0f172a; display:block; }
+  .img-picker-card .meta { padding:6px 8px; font-size:11px; line-height:1.4; color:#64748b; word-break:break-all; }
+  .img-picker-card .name { font-weight:600; color:#334155; margin-bottom:2px; }
+  .image-link-banner {
+    margin-bottom: 14px; padding: 12px 14px; background: #eff6ff; border: 1px solid #bfdbfe;
+    border-radius: 8px;
+  }
+  .image-link-banner .cap {
+    font-size: 13px; font-weight: 600; color: #1e40af; margin-bottom: 8px;
+  }
+  .image-link-banner .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .image-link-banner .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .image-path-text { font-size: 12px; color: #475569; word-break: break-all; margin-top: 6px; }
   @media (max-width: 768px) {
     .recognize-body { grid-template-columns: 1fr; }
   }
@@ -186,6 +209,8 @@
 </head>
 <body>
 <div id="app">
+  <input ref="nativeFileInputRef" type="file" accept="image/jpeg,image/png,image/jpg,.jpg,.jpeg,.png"
+    style="display:none" @change="onNativeFileSelected" />
   <div v-if="!libsReady" class="load-error">
     <p>Vue / Element Plus 加载失败。</p>
     <p style="color:#909399;font-size:13px">请确认 app/static/vendor/ 完整并重启 uvicorn。</p>
@@ -214,6 +239,9 @@
       </el-button>
       <el-button type="danger" size="small" plain :disabled="!selectedIds.length" @click="bulkDelete">
         批量删除<span v-if="selectedIds.length"> ({{ selectedIds.length }})</span>
+      </el-button>
+      <el-button v-if="selectedIds.length === 1" type="primary" size="small" plain @click="openImagePickerForSelected">
+        关联原图
       </el-button>
       <el-divider direction="vertical" />
       <el-button size="small" plain @click="selectAllFiltered" :disabled="!filteredRecords.length">全选筛选</el-button>
@@ -412,17 +440,23 @@
               </template>
             </el-table-column>
 
-            <el-table-column label="Debug/原图" min-width="120" align="center">
+            <el-table-column label="原图" min-width="200" align="center">
               <template v-slot="scope">
-                <el-button v-if="scope.row.debug_run_id" link type="primary" size="small"
-                  @click.stop="openDebugViewer(scope.row.debug_run_id)">Debug</el-button>
-                <el-button v-if="scope.row.image_rel" link type="primary" size="small"
-                  @click.stop="openImagePreview(scope.row.image_rel)">原图</el-button>
-                <span v-if="!scope.row.debug_run_id && !scope.row.image_rel">—</span>
+                <div style="font-size:11px;color:#64748b;margin-bottom:4px;word-break:break-all;max-width:190px;margin:0 auto 4px">
+                  {{ scope.row.image_rel || (scope.row.debug_run_id ? 'Debug:' + scope.row.debug_run_id : '未关联') }}
+                </div>
+                <div class="action-btns" style="flex-wrap:wrap">
+                  <el-button type="primary" link size="small" @click.stop="openImagePickerForRecord(scope.row)">选择文件</el-button>
+                  <el-button link type="primary" size="small" @click.stop="openImageLibrary(scope.row.id)">浏览</el-button>
+                  <el-button v-if="scope.row.image_rel" link type="primary" size="small"
+                    @click.stop="openImagePreview(scope.row.image_rel)">预览</el-button>
+                  <el-button v-if="scope.row.debug_run_id" link type="primary" size="small"
+                    @click.stop="openDebugViewer(scope.row.debug_run_id)">Debug</el-button>
+                </div>
               </template>
             </el-table-column>
 
-            <el-table-column label="操作" width="160" align="center" fixed="right">
+            <el-table-column label="操作" width="168" align="center" fixed="right">
               <template v-slot="scope">
                 <div class="action-btns">
                   <el-button v-if="canRecognize(scope.row)" type="success" link size="small"
@@ -457,6 +491,22 @@
 
     <!-- 编辑抽屉 -->
     <el-drawer v-model="drawerVisible" :title="drawerTitle" size="520px" :close-on-click-modal="false">
+      <div class="image-link-banner">
+        <div class="cap">原图关联（img/ 目录）</div>
+        <div class="row">
+          <el-input v-model="form.image_rel" placeholder="相对 img/ 的路径，如 test1.jpg" clearable
+            style="flex:1;min-width:200px" @change="onImageRelInputChange" @blur="onImageRelInputChange" />
+        </div>
+        <div class="actions">
+          <el-button type="primary" @click="triggerNativeFilePick()">选择文件</el-button>
+          <el-button plain @click="openImageLibrary">浏览 img 目录</el-button>
+          <el-button :loading="imageRelChecking" @click="verifyCurrentImageRel(false)">验证路径</el-button>
+          <el-button v-if="form.image_rel" plain @click="clearImageRel">清除路径</el-button>
+          <el-button v-if="form.image_rel" plain @click="openImagePreview(form.image_rel)">预览原图</el-button>
+        </div>
+        <div class="form-hint" :class="imageRelHintClass" style="margin-top:8px">{{ imageRelHint }}</div>
+        <div v-if="form.image_rel" class="image-path-text">当前：{{ form.image_rel }}</div>
+      </div>
       <div v-if="canCompare(formRowForCompare) || canRecognize(formRowForCompare)" style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
         <el-button v-if="canCompare(formRowForCompare)" type="primary" plain :loading="compareLoading" @click="openCompareFromForm">
           查看调色前后对比
@@ -489,13 +539,16 @@
             <el-button link type="primary" size="small" @click="openDebugViewer(form.debug_run_id)">查看</el-button>
           </div>
           <div v-if="form.image_rel"><strong>原图:</strong> {{ form.image_rel }}
-            <el-button v-if="importPreview.thumb_url" link type="primary" size="small"
-              @click="openImagePreview(form.image_rel)">打开</el-button>
+            <el-button link type="primary" size="small" @click="openImagePreview(form.image_rel)">打开</el-button>
           </div>
           <div v-if="importPreview.summary">{{ importPreview.summary }}</div>
         </div>
       </div>
       <el-form ref="formRef" :model="form" :rules="formRules" label-width="118px" @submit.prevent>
+        <el-form-item label="Debug Run">
+          <el-input v-model="form.debug_run_id" placeholder="可选；填写原图路径后优先使用原图" clearable />
+          <div class="form-hint">无原图时可填 Debug run_id，从 debug_output 读取 00_original.jpg</div>
+        </el-form-item>
         <div class="form-section-title">基本信息</div>
         <el-form-item label="实验大组" prop="group_name">
           <div style="display:flex;gap:8px;width:100%;align-items:center">
@@ -673,6 +726,11 @@
         记录 #{{ recognizeTarget.id }}
         <span v-if="recognizeTarget.image_rel"> · 原图 {{ recognizeTarget.image_rel }}</span>
         <span v-else-if="recognizeTarget.debug_run_id"> · Debug {{ recognizeTarget.debug_run_id }}</span>
+        <el-button v-if="recognizeImageMissing" link type="warning" size="small" style="margin-left:8px"
+          @click="openEditForImageFromRecognize">更改原图</el-button>
+      </div>
+      <div v-if="recognizeImageMissing" class="form-hint err" style="margin-bottom:10px">
+        原图文件不存在或路径无效，请更改原图路径后保存，再重新识别。
       </div>
       <div class="recognize-body" v-loading="recognizeLoading">
         <div>
@@ -907,6 +965,35 @@
           <div ref="chartBoundaryRef" class="stability-chart stability-chart-sm" v-loading="stabilityLoading"></div>
         </el-tab-pane>
       </el-tabs>
+    </el-dialog>
+
+    <el-dialog v-model="imagePickerVisible" title="浏览 img 目录已有图片" width="760px" top="6vh"
+      append-to-body :z-index="4000" destroy-on-close
+      @opened="onImagePickerOpened" @closed="onImagePickerClosed">
+      <div v-if="imagePickerTargetId" style="font-size:12px;color:#1e40af;margin-bottom:10px;padding:8px 10px;background:#eff6ff;border-radius:6px">
+        正在为记录 #{{ imagePickerTargetId }} 选择原图，点击缩略图后将自动保存路径
+      </div>
+      <div class="img-picker-toolbar">
+        <el-input v-model="imagePickerSearch" placeholder="搜索文件名或路径…" clearable style="flex:1;min-width:200px" />
+        <el-button :loading="imagePickerLoading" @click="loadImgFileList">刷新列表</el-button>
+        <span style="font-size:12px;color:#64748b">共 {{ filteredImgList.length }} 张</span>
+      </div>
+      <div v-loading="imagePickerLoading || imagePickerSaving" class="img-picker-grid">
+        <div v-for="img in filteredImgList" :key="img.rel" class="img-picker-card"
+          :class="{ active: form.image_rel === img.rel }" @click="pickImageRel(img)">
+          <img :src="experimentImgUrl(img.rel)" :alt="img.name" loading="lazy" @error="$event.target.style.opacity='0.3'" />
+          <div class="meta">
+            <div class="name">{{ img.name }}</div>
+            <div>{{ img.rel }}</div>
+          </div>
+        </div>
+      </div>
+      <div v-if="!imagePickerLoading && !filteredImgList.length" style="text-align:center;color:#909399;padding:24px">
+        未找到图片，请确认 img/ 目录下有 jpg/png 文件
+      </div>
+      <template #footer>
+        <el-button @click="imagePickerVisible = false">取消</el-button>
+      </template>
     </el-dialog>
 
     <el-dialog v-model="bulkRecognizeDialogVisible" title="批量重识别进度" width="520px" :close-on-click-modal="false" :show-close="!bulkRecognizeLoading">
@@ -1295,6 +1382,43 @@
       const bulkRecognizeDialogVisible = ref(false);
       const bulkRecognizeResults = ref([]);
       const bulkRecognizeProgress = reactive({ done: 0, total: 0, succeeded: 0, failed: 0 });
+      const imagePickerVisible = ref(false);
+      const imagePickerSearch = ref('');
+      const imagePickerLoading = ref(false);
+      const imgFileList = ref([]);
+      const imageRelStatus = ref('');
+      const imageRelChecking = ref(false);
+      const recognizeImageMissing = ref(false);
+      const imagePickerTargetId = ref(null);
+      const imagePickerSaving = ref(false);
+      const nativeFileInputRef = ref(null);
+
+      const filteredImgList = computed(() => {
+        const q = imagePickerSearch.value.trim().toLowerCase();
+        let list = imgFileList.value;
+        if (q) {
+          list = list.filter(img =>
+            (img.rel || '').toLowerCase().includes(q) ||
+            (img.name || '').toLowerCase().includes(q)
+          );
+        }
+        return list;
+      });
+
+      const imageRelHintClass = computed(() => {
+        if (imageRelStatus.value === 'ok') return 'ok';
+        if (imageRelStatus.value === 'missing') return 'err';
+        return '';
+      });
+
+      const imageRelHint = computed(() => {
+        if (!form.image_rel) {
+          return '留空时可依赖 Debug Run；路径相对项目 img/ 目录，更改后请保存并重新识别';
+        }
+        if (imageRelStatus.value === 'ok') return '原图文件存在，可直接用于识别与对比';
+        if (imageRelStatus.value === 'missing') return '原图文件不存在，请点击「选择文件」重新指定或修正路径';
+        return '相对 img/ 的路径，如 test1.jpg 或 子目录/photo.jpg';
+      });
 
       const statDimOptions = STAT_DIM_OPTIONS;
       const activeStatDims = computed(() =>
@@ -2097,8 +2221,210 @@
       function openDebugViewer(runId) {
         window.open('/debug/viewer/' + encodeURIComponent(runId) + '?key=' + encodeURIComponent(apiKey.value), '_blank');
       }
+      function experimentImgUrl(rel) {
+        if (!rel) return '';
+        return apiUrl('/experiments/meta/img-file', { rel });
+      }
       function openImagePreview(rel) {
-        window.open('/debug/img/file?rel=' + encodeURIComponent(rel) + '&key=' + encodeURIComponent(apiKey.value), '_blank');
+        if (!rel) return;
+        window.open(experimentImgUrl(rel), '_blank');
+      }
+
+      async function loadImgFileList() {
+        imagePickerLoading.value = true;
+        try {
+          const data = await apiFetch('/experiments/meta/img-list');
+          imgFileList.value = Array.isArray(data.images) ? data.images : [];
+        } catch (e) {
+          ElMessage.error('加载 img 列表失败：' + e.message);
+        } finally {
+          imagePickerLoading.value = false;
+        }
+      }
+
+      async function onImagePickerOpened() {
+        if (!imagePickerSearch.value) {
+          const hint = (form.image_rel || '').split('/').pop();
+          if (hint) imagePickerSearch.value = hint;
+        }
+        if (!imgFileList.value.length) await loadImgFileList();
+      }
+
+      function openImagePickerFromDrawer() {
+        triggerNativeFilePick(editingId.value || null);
+      }
+
+      function openImagePickerForRecord(row) {
+        if (!row?.id) return;
+        imagePickerTargetId.value = row.id;
+        skipSubgroupDefaults = true;
+        editingId.value = row.id;
+        Object.assign(form, {
+          group_name: row.group_name||'', subgroup_name: row.subgroup_name||'', experiment_date: row.experiment_date||todayStr(),
+          operator: row.operator||'', camera_device: row.camera_device||'', light_device: row.light_device||'',
+          illuminance: row.illuminance??undefined, color: row.color||'',
+          grade_before: row.grade_before||'', lstar_before: row.lstar_before??undefined,
+          grade_after: row.grade_after||'', lstar_after: row.lstar_after??undefined,
+          skip_quality: !!row.skip_quality, manual_adjusted: !!row.manual_adjusted,
+          include_in_stats: row.include_in_stats !== false,
+          notes: row.notes||'',
+          image_rel: row.image_rel||'', debug_run_id: row.debug_run_id||'',
+        });
+        skipSubgroupDefaults = false;
+        triggerNativeFilePick(row.id);
+      }
+
+      function openImagePickerForSelected() {
+        if (selectedIds.value.length !== 1) return;
+        const row = allRecords.value.find(r => r.id === selectedIds.value[0]);
+        if (row) openImagePickerForRecord(row);
+      }
+
+      function triggerNativeFilePick(targetId) {
+        if (targetId != null) imagePickerTargetId.value = targetId;
+        else if (editingId.value) imagePickerTargetId.value = editingId.value;
+        nextTick(() => {
+          const input = nativeFileInputRef.value;
+          if (!input) {
+            ElMessage.error('文件选择器未就绪，请刷新页面后重试');
+            return;
+          }
+          input.value = '';
+          input.click();
+        });
+      }
+
+      function openImageLibrary(targetId) {
+        if (targetId != null) imagePickerTargetId.value = targetId;
+        else if (editingId.value) imagePickerTargetId.value = editingId.value;
+        imagePickerVisible.value = true;
+      }
+
+      function onImagePickerClosed() {
+        imagePickerTargetId.value = null;
+      }
+
+      async function applyPickedImageRel(rel, successMsg, explicitTargetId) {
+        form.image_rel = rel;
+        await onImageRelInputChange();
+        const targetId = explicitTargetId != null ? explicitTargetId : imagePickerTargetId.value;
+        if (targetId) {
+          imagePickerSaving.value = true;
+          try {
+            await saveImageRelToRecord(targetId, rel);
+            ElMessage.success(successMsg || ('已关联原图：' + rel));
+            if (editingId.value === targetId) {
+              setEditPreview({ ...form, id: targetId, image_before_rel: null, image_after_rel: null });
+            }
+            await loadRecords();
+          } catch (e) {
+            ElMessage.error('保存原图路径失败：' + e.message);
+          } finally {
+            imagePickerSaving.value = false;
+            imagePickerTargetId.value = null;
+          }
+        } else {
+          ElMessage.success((successMsg || ('已选择：' + rel)) + '（请保存记录）');
+        }
+      }
+
+      async function onNativeFileSelected(ev) {
+        const file = ev.target.files?.[0];
+        if (ev.target) ev.target.value = '';
+        if (!file) return;
+        imagePickerSaving.value = true;
+        try {
+          const fd = new FormData();
+          fd.append('file', file);
+          const res = await fetch(apiUrl('/experiments/meta/upload-image'), { method: 'POST', body: fd });
+          if (!res.ok) {
+            let detail = res.statusText;
+            try { detail = (await res.json()).detail || detail; } catch (_) {}
+            throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+          }
+          const data = await res.json();
+          if (!data?.rel) throw new Error('upload_failed');
+          await applyPickedImageRel(data.rel, '已上传并关联：' + data.rel);
+        } catch (e) {
+          ElMessage.error('上传原图失败：' + (e.message || e));
+          imagePickerTargetId.value = null;
+        } finally {
+          imagePickerSaving.value = false;
+        }
+      }
+
+      async function saveImageRelToRecord(recordId, imageRel) {
+        const record = await apiFetchRecords('/experiments/records/' + recordId);
+        const payload = { ...record, image_rel: imageRel || null };
+        await apiFetchRecords('/experiments/records/' + recordId, { method: 'PUT', body: payload });
+        const idx = allRecords.value.findIndex(r => r.id === recordId);
+        if (idx >= 0) {
+          allRecords.value[idx] = { ...allRecords.value[idx], image_rel: imageRel || null };
+        }
+      }
+
+      function openImagePicker() {
+        openImageLibrary(editingId.value || null);
+      }
+
+      async function pickImageRel(img) {
+        if (!img?.rel) return;
+        const targetId = imagePickerTargetId.value;
+        imagePickerVisible.value = false;
+        await applyPickedImageRel(img.rel, undefined, targetId);
+      }
+
+      function clearImageRel() {
+        form.image_rel = '';
+        imageRelStatus.value = '';
+        updateFormImagePreview();
+      }
+
+      function updateFormImagePreview() {
+        if (form.image_rel) {
+          importPreview.thumb_url = experimentImgUrl(form.image_rel);
+          importPreview.summary = 'img:' + form.image_rel;
+        } else if (!form.debug_run_id) {
+          importPreview.thumb_url = '';
+          importPreview.summary = '';
+        }
+      }
+
+      async function onImageRelInputChange() {
+        updateFormImagePreview();
+        if (form.image_rel) await verifyCurrentImageRel(true);
+        else imageRelStatus.value = '';
+      }
+
+      async function verifyCurrentImageRel(silent) {
+        const rel = (form.image_rel || '').trim();
+        if (!rel) {
+          imageRelStatus.value = '';
+          return false;
+        }
+        imageRelChecking.value = true;
+        try {
+          const data = await apiFetch('/experiments/meta/check-image', { query: { rel } });
+          imageRelStatus.value = data.ok ? 'ok' : 'missing';
+          if (!silent) {
+            if (data.ok) ElMessage.success('原图路径有效');
+            else ElMessage.warning('原图文件不存在：' + rel);
+          }
+          return !!data.ok;
+        } catch (e) {
+          imageRelStatus.value = 'missing';
+          if (!silent) ElMessage.warning('无法验证原图：' + e.message);
+          return false;
+        } finally {
+          imageRelChecking.value = false;
+        }
+      }
+
+      function openEditForImageFromRecognize() {
+        const row = recognizeTarget.value;
+        recognizeDialogVisible.value = false;
+        recognizeImageMissing.value = false;
+        if (row) openImagePickerForRecord(row);
       }
 
       function canRecognize(row) {
@@ -2299,6 +2625,7 @@
         recognizeOverwriteRecord.value = true;
         recognizeOverwriteSnapshots.value = true;
         recognizePreview.value = null;
+        recognizeImageMissing.value = false;
         recognizeOverlayUrl.value = '';
         recognizeDialogVisible.value = true;
         await nextTick();
@@ -2351,7 +2678,10 @@
             };
           }
         } catch (e) {
-          ElMessage.error('识别失败：' + compareErrorLabel(e.message));
+          const msg = compareErrorLabel(e.message);
+          recognizeImageMissing.value = String(e.message || '').includes('image_not_found') ||
+            String(msg).includes('原图文件不存在');
+          ElMessage.error('识别失败：' + msg);
         } finally {
           recognizeLoading.value = false;
         }
@@ -2732,7 +3062,7 @@
           importPreview.after_url = snapshotUrlPrefix.value + row.id + '/after.jpg?key=' + key;
           importPreview.compare_url = '';
           importPreview.thumb_url = row.image_rel
-            ? '/debug/img/file?rel=' + encodeURIComponent(row.image_rel) + '&key=' + key
+            ? experimentImgUrl(row.image_rel)
             : importPreview.before_url;
         } else if (row.debug_run_id) {
           const base = '/debug/files/' + row.debug_run_id;
@@ -2745,7 +3075,7 @@
           importPreview.after_url = '';
           importPreview.compare_url = '';
           importPreview.thumb_url = row.image_rel
-            ? '/debug/img/file?rel=' + encodeURIComponent(row.image_rel) + '&key=' + key
+            ? experimentImgUrl(row.image_rel)
             : '';
         }
         importPreview.summary = row.image_rel ? ('img:' + row.image_rel) : '';
@@ -2768,6 +3098,7 @@
         setEditPreview(row);
         drawerVisible.value = true;
         skipSubgroupDefaults = false;
+        if (form.image_rel) verifyCurrentImageRel(true);
       }
 
       async function saveForm() {
@@ -2920,6 +3251,10 @@
         openStabilityStats, refreshStabilityStats, renderStabilityCharts, onStabilityDialogOpened, onStabilityGroupChange,
         refreshAll, onTableSetChange, copySelectedToTest, copyAllToTest,
         bulkRecognizeLoading, bulkRecognizeDialogVisible, bulkRecognizeResults, bulkRecognizeProgress, bulkRecognize,
+        imagePickerVisible, imagePickerSearch, imagePickerLoading, imagePickerTargetId, imagePickerSaving, nativeFileInputRef, filteredImgList, imageRelHint, imageRelHintClass,
+        imageRelChecking, recognizeImageMissing, openImagePicker, openImagePickerFromDrawer, openImagePickerForRecord, openImagePickerForSelected,
+        triggerNativeFilePick, openImageLibrary, onImagePickerOpened, onImagePickerClosed, loadImgFileList, pickImageRel, onNativeFileSelected,
+        clearImageRel, verifyCurrentImageRel, onImageRelInputChange, experimentImgUrl, openEditForImageFromRecognize,
         openCreate, openEdit, saveForm, deleteOne, bulkDelete, suggestNames,
         openGradeStats, refreshGradeStats, gradeShort, gradeCountSum, formatStatDim,
         suggestOperator, suggestCamera, suggestLight, suggestColor, suggestGrade,
