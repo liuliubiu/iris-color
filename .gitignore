@@ -51,6 +51,16 @@ iris-vision/assets/test_face.*
 # Debug output (dev only)
 iris-vision/debug_output/
 
+# Experiment runtime data (local only)
+iris-vision/data/
+
+# JVM crash logs
+hs_err_pid*.log
+replay_pid*.log
+
+# Local archives
+*.rar
+
 # Env secrets
 .env
 .env.local
