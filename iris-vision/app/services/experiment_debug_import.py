@@ -83,9 +83,10 @@ def debug_run_image_urls(run_id: str, api_key: str) -> dict[str, str]:
     }
 
 
-def experiment_snapshot_urls(record_id: int, api_key: str) -> dict[str, str]:
+def experiment_snapshot_urls(record_id: int, api_key: str, *, table_set: str = "prod") -> dict[str, str]:
     """已持久化到实验快照目录的调色前后图 URL。"""
-    base = f"/experiments/snapshots/{record_id}"
+    prefix = "/experiments/test/snapshots" if table_set == "test" else "/experiments/snapshots"
+    base = f"{prefix}/{record_id}"
     key_q = f"?key={api_key}"
     return {
         "thumb_before_url": f"{base}/before.jpg{key_q}",
@@ -767,6 +768,61 @@ def apply_record_recognition(
         "skip_quality_used": skip_quality_used,
         "overwritten_record": overwrite_record,
         "overwritten_snapshots": overwrite_snapshots,
+    }
+
+
+def bulk_apply_record_recognition(
+    record_ids: list[int],
+    store,
+    config: dict,
+    config_path: Path,
+    img_root: Path,
+    debug_output_root: Path,
+    snapshot_root: Path,
+    *,
+    overwrite_record: bool = True,
+    overwrite_snapshots: bool = True,
+    skip_quality: Optional[bool] = None,
+    closeup_mode: str = "auto",
+) -> dict[str, Any]:
+    """批量应用重新识别结果。"""
+    results: list[dict[str, Any]] = []
+    succeeded = 0
+    failed = 0
+    for rid in record_ids:
+        record = store.get_by_id(int(rid))
+        if not record:
+            results.append({"id": int(rid), "ok": False, "error": "record_not_found"})
+            failed += 1
+            continue
+        if not record.get("image_rel") and not record.get("debug_run_id"):
+            results.append({"id": int(rid), "ok": False, "error": "no_image_source"})
+            failed += 1
+            continue
+        try:
+            out = apply_record_recognition(
+                record,
+                store,
+                config,
+                config_path,
+                img_root,
+                debug_output_root,
+                snapshot_root,
+                overwrite_record=overwrite_record,
+                overwrite_snapshots=overwrite_snapshots,
+                skip_quality=skip_quality,
+                closeup_mode=closeup_mode,
+            )
+            results.append({"id": int(rid), "ok": True, "record": out["record"]})
+            succeeded += 1
+        except Exception as exc:
+            results.append({"id": int(rid), "ok": False, "error": str(exc)})
+            failed += 1
+    return {
+        "results": results,
+        "succeeded": succeeded,
+        "failed": failed,
+        "total": len(record_ids),
     }
 
 

@@ -34,3 +34,33 @@ CREATE TABLE IF NOT EXISTS experiment_records (
     INDEX idx_exp_date (experiment_date),
     INDEX idx_exp_operator (operator)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 测试记录表（结构与正式表相同，供算法对比实验）
+CREATE TABLE IF NOT EXISTS experiment_records_test (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    group_name VARCHAR(32) NOT NULL COMMENT '实验大组',
+    subgroup_name VARCHAR(16) NULL COMMENT '实验小组，可空',
+    experiment_date DATE NOT NULL,
+    operator VARCHAR(64) NOT NULL,
+    camera_device VARCHAR(128) NULL,
+    light_device VARCHAR(128) NULL,
+    illuminance INT NULL COMMENT '环境照度 lx',
+    color VARCHAR(16) NULL COMMENT '9种标准色',
+    grade_before VARCHAR(16) NULL,
+    lstar_before DOUBLE NULL,
+    grade_after VARCHAR(16) NULL,
+    lstar_after DOUBLE NULL,
+    notes TEXT NULL,
+    image_rel VARCHAR(512) NULL COMMENT 'img/ 相对路径',
+    debug_run_id VARCHAR(32) NULL COMMENT 'debug_output run_id',
+    skip_quality TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否跳过质量检测',
+    manual_adjusted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否人工调整识别',
+    include_in_stats TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否纳入统计',
+    image_before_rel VARCHAR(512) NULL COMMENT '持久化调色前快照路径',
+    image_after_rel VARCHAR(512) NULL COMMENT '持久化调色后快照路径',
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_exp_group (group_name),
+    INDEX idx_exp_date (experiment_date),
+    INDEX idx_exp_operator (operator)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

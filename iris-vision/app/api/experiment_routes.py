@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from app.services.experiment_debug_import import (
     COMPARE_AUDIT_FILENAME,
     apply_record_recognition,
+    bulk_apply_record_recognition,
     build_record_recognition_preview,
     enrich_audit_with_current_standards,
     enrich_import_payload_urls,
@@ -22,7 +23,7 @@ from app.services.experiment_debug_import import (
     snapshot_compare_images,
 )
 from app.services.experiment_stability import analyze_stability
-from app.services.experiment_store import ExperimentStore, create_experiment_store
+from app.services.experiment_store import ExperimentStore, TABLE_PROD, TABLE_TEST, create_experiment_store
 from app.services.pipeline import load_config
 
 router = APIRouter(prefix="/experiments", tags=["experiments"])
@@ -33,6 +34,18 @@ IMG_ROOT = ROOT.parent / "img"
 
 _store: Optional[ExperimentStore] = None
 _store_key: Optional[str] = None
+_stores: dict[str, ExperimentStore] = {}
+
+
+def _parse_table_set(table_set: Optional[str]) -> str:
+    value = (table_set or "prod").strip().lower()
+    if value not in ("prod", "test"):
+        raise HTTPException(status_code=400, detail="invalid_table_set")
+    return value
+
+
+def _table_name_for_set(table_set: str) -> str:
+    return TABLE_TEST if table_set == "test" else TABLE_PROD
 
 
 def _verify_key(key: Optional[str]) -> dict:
@@ -57,21 +70,27 @@ def _store_cache_key(exp_cfg: dict) -> str:
     return "sqlite:" + str(exp_cfg.get("db_path", "data/experiment_records.db"))
 
 
-def _get_store(config: dict) -> ExperimentStore:
-    global _store, _store_key
+def _get_store(config: dict, table_set: str = "prod") -> ExperimentStore:
+    global _store, _store_key, _stores
+    table_set = _parse_table_set(table_set)
     exp_cfg = config.get("experiments", {})
-    key = _store_cache_key(exp_cfg)
-    if _store is None or _store_key != key:
+    cache_key = _store_cache_key(exp_cfg) + ":" + table_set
+    if cache_key not in _stores:
         try:
-            _store = create_experiment_store(exp_cfg, ROOT)
-            _store_key = key
+            _stores[cache_key] = create_experiment_store(
+                exp_cfg, ROOT, table_name=_table_name_for_set(table_set)
+            )
         except RuntimeError as exc:
             if str(exc) == "pymysql_not_installed":
                 raise HTTPException(status_code=500, detail="pymysql_not_installed") from exc
             raise
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"database_unavailable: {exc}") from exc
-    return _store
+    store = _stores[cache_key]
+    if table_set == "prod":
+        _store = store
+        _store_key = cache_key
+    return store
 
 
 def _handle_value_error(exc: ValueError) -> HTTPException:
@@ -86,9 +105,12 @@ def _debug_api_key(config: dict) -> str:
     return config.get("debug", {}).get("api_key", "iris-color-dev")
 
 
-def _experiment_snapshot_root(config: dict) -> Path:
+def _experiment_snapshot_root(config: dict, table_set: str = "prod") -> Path:
     exp_cfg = config.get("experiments", {})
-    rel = exp_cfg.get("snapshot_dir", "data/experiment_snapshots")
+    if _parse_table_set(table_set) == "test":
+        rel = exp_cfg.get("snapshot_dir_test", "data/experiment_snapshots_test")
+    else:
+        rel = exp_cfg.get("snapshot_dir", "data/experiment_snapshots")
     return ROOT / rel
 
 
@@ -107,13 +129,15 @@ def _apply_compare_snapshot_paths(
     return updated or record
 
 
-def _persist_compare_snapshots(config: dict, store: ExperimentStore, record: dict) -> dict:
+def _persist_compare_snapshots(
+    config: dict, store: ExperimentStore, record: dict, *, table_set: str = "prod"
+) -> dict:
     """保存实验记录后，持久化调色前后对比图（debug run 或原图重识别）。"""
     if record.get("image_before_rel") and record.get("image_after_rel"):
         return record
 
     record_id = int(record["id"])
-    snapshot_root = _experiment_snapshot_root(config)
+    snapshot_root = _experiment_snapshot_root(config, table_set)
 
     run_id = record.get("debug_run_id")
     if run_id:
@@ -153,18 +177,20 @@ def ensure_record_compare_images(
     config: dict,
     store: ExperimentStore,
     record_id: int,
+    *,
+    table_set: str = "prod",
 ) -> dict:
     """确保记录已有调色前后快照；若无则按 debug run 或 image_rel 生成。"""
     record = store.get_by_id(record_id)
     if not record:
         raise HTTPException(status_code=404, detail="record_not_found")
 
-    snapshot_root = _experiment_snapshot_root(config)
+    snapshot_root = _experiment_snapshot_root(config, table_set)
     try:
         if record.get("image_before_rel") and record.get("image_after_rel"):
             out = dict(record)
         else:
-            out = _persist_compare_snapshots(config, store, record)
+            out = _persist_compare_snapshots(config, store, record, table_set=table_set)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -187,11 +213,9 @@ def ensure_record_compare_images(
     if audit:
         audit = enrich_audit_with_current_standards(audit, config)
 
-    urls = experiment_snapshot_urls(
-        record_id,
-        config.get("experiments", {}).get("api_key", "iris-color-dev"),
-    )
     api_key = config.get("experiments", {}).get("api_key", "iris-color-dev")
+    urls = experiment_snapshot_urls(record_id, api_key, table_set=table_set)
+    snap_prefix = "test/snapshots" if table_set == "test" else "snapshots"
     result = {
         **out,
         "thumb_before_url": urls["thumb_before_url"],
@@ -199,7 +223,7 @@ def ensure_record_compare_images(
         "compare_audit": audit,
     }
     if audit:
-        result["audit_url"] = f"/experiments/snapshots/{record_id}/{COMPARE_AUDIT_FILENAME}?key={api_key}"
+        result["audit_url"] = f"/experiments/{snap_prefix}/{record_id}/{COMPARE_AUDIT_FILENAME}?key={api_key}"
     return result
 
 
@@ -215,6 +239,7 @@ def experiment_ui(key: str = Query(...)):
 @router.get("/records")
 def list_records(
     key: str = Query(...),
+    table_set: str = Query("prod", description="prod=正式记录, test=测试记录"),
     group_name: Optional[str] = Query(None),
     subgroup_name: Optional[str] = Query(None),
     date_from: Optional[str] = Query(None),
@@ -227,7 +252,8 @@ def list_records(
     grade_after: Optional[str] = Query(None),
 ):
     config = _verify_key(key)
-    store = _get_store(config)
+    ts = _parse_table_set(table_set)
+    store = _get_store(config, ts)
     records = store.list_records(
         group_name=group_name,
         subgroup_name=subgroup_name,
@@ -240,13 +266,18 @@ def list_records(
         grade_before=grade_before,
         grade_after=grade_after,
     )
-    return {"records": records, "count": len(records)}
+    return {"records": records, "count": len(records), "table_set": ts}
 
 
 @router.get("/records/{record_id}")
-def get_record(record_id: int, key: str = Query(...)):
+def get_record(
+    record_id: int,
+    key: str = Query(...),
+    table_set: str = Query("prod"),
+):
     config = _verify_key(key)
-    store = _get_store(config)
+    ts = _parse_table_set(table_set)
+    store = _get_store(config, ts)
     record = store.get_by_id(record_id)
     if not record:
         raise HTTPException(status_code=404, detail="record_not_found")
@@ -257,17 +288,21 @@ def get_record(record_id: int, key: str = Query(...)):
 def ensure_compare_images(
     record_id: int,
     key: str = Query(...),
+    table_set: str = Query("prod"),
     force: bool = Query(False, description="强制用当前算法重算并覆盖已有快照"),
 ):
     """按需生成或返回实验记录的调色前后对比图。"""
     config = _verify_key(key)
-    store = _get_store(config)
+    ts = _parse_table_set(table_set)
+    store = _get_store(config, ts)
+    api_key = config.get("experiments", {}).get("api_key", "iris-color-dev")
+    snap_prefix = "test/snapshots" if ts == "test" else "snapshots"
     try:
         if force:
             record = store.get_by_id(record_id)
             if not record:
                 raise HTTPException(status_code=404, detail="record_not_found")
-            snapshot_root = _experiment_snapshot_root(config)
+            snapshot_root = _experiment_snapshot_root(config, ts)
             from app.services.experiment_debug_import import generate_compare_snapshots_for_record
 
             paths = generate_compare_snapshots_for_record(
@@ -286,30 +321,32 @@ def ensure_compare_images(
             audit = load_compare_audit(snapshot_root, record_id)
             if audit:
                 audit = enrich_audit_with_current_standards(audit, config)
-            urls = experiment_snapshot_urls(
-                record_id,
-                config.get("experiments", {}).get("api_key", "iris-color-dev"),
-            )
-            api_key = config.get("experiments", {}).get("api_key", "iris-color-dev")
+            urls = experiment_snapshot_urls(record_id, api_key, table_set=ts)
             return {
                 **out,
                 "thumb_before_url": urls["thumb_before_url"],
                 "thumb_after_url": urls["thumb_after_url"],
                 "compare_audit": audit,
-                "audit_url": f"/experiments/snapshots/{record_id}/{COMPARE_AUDIT_FILENAME}?key={api_key}"
+                "audit_url": f"/experiments/{snap_prefix}/{record_id}/{COMPARE_AUDIT_FILENAME}?key={api_key}"
                 if audit
                 else None,
             }
-        return ensure_record_compare_images(config, store, record_id)
+        return ensure_record_compare_images(config, store, record_id, table_set=ts)
     except ValueError as exc:
         raise _handle_value_error(exc) from exc
 
 
 @router.post("/records/{record_id}/recognize")
-def recognize_record_preview(record_id: int, key: str = Query(...), body: dict = Body(default={})):
+def recognize_record_preview(
+    record_id: int,
+    key: str = Query(...),
+    table_set: str = Query("prod"),
+    body: dict = Body(default={}),
+):
     """对关联原图用当前算法识别（预览，不写库）。"""
     config = _verify_key(key)
-    store = _get_store(config)
+    ts = _parse_table_set(table_set)
+    store = _get_store(config, ts)
     record = store.get_by_id(record_id)
     if not record:
         raise HTTPException(status_code=404, detail="record_not_found")
@@ -329,10 +366,16 @@ def recognize_record_preview(record_id: int, key: str = Query(...), body: dict =
 
 
 @router.post("/records/{record_id}/recognize/apply")
-def recognize_record_apply(record_id: int, key: str = Query(...), body: dict = Body(...)):
+def recognize_record_apply(
+    record_id: int,
+    key: str = Query(...),
+    table_set: str = Query("prod"),
+    body: dict = Body(...),
+):
     """应用重新识别结果，可选覆盖实验记录字段与对比快照。"""
     config = _verify_key(key)
-    store = _get_store(config)
+    ts = _parse_table_set(table_set)
+    store = _get_store(config, ts)
     record = store.get_by_id(record_id)
     if not record:
         raise HTTPException(status_code=404, detail="record_not_found")
@@ -350,7 +393,7 @@ def recognize_record_apply(record_id: int, key: str = Query(...), body: dict = B
             CONFIG_PATH,
             IMG_ROOT,
             _debug_output_root(config),
-            _experiment_snapshot_root(config),
+            _experiment_snapshot_root(config, ts),
             overwrite_record=overwrite_record,
             overwrite_snapshots=overwrite_snapshots,
             skip_quality=body.get("skip_quality"),
@@ -363,7 +406,7 @@ def recognize_record_apply(record_id: int, key: str = Query(...), body: dict = B
     api_key = config.get("experiments", {}).get("api_key", "iris-color-dev")
     out_record = result["record"]
     if out_record.get("image_before_rel") and out_record.get("image_after_rel"):
-        urls = experiment_snapshot_urls(record_id, api_key)
+        urls = experiment_snapshot_urls(record_id, api_key, table_set=ts)
         out_record = {
             **out_record,
             "thumb_before_url": urls["thumb_before_url"],
@@ -373,36 +416,53 @@ def recognize_record_apply(record_id: int, key: str = Query(...), body: dict = B
 
 
 @router.post("/records", status_code=201)
-def create_record(key: str = Query(...), payload: dict = Body(...)):
+def create_record(
+    key: str = Query(...),
+    table_set: str = Query("prod"),
+    payload: dict = Body(...),
+):
     config = _verify_key(key)
-    store = _get_store(config)
+    ts = _parse_table_set(table_set)
+    store = _get_store(config, ts)
     try:
         record = store.create_record(payload)
-        record = _persist_compare_snapshots(config, store, record)
+        record = _persist_compare_snapshots(config, store, record, table_set=ts)
         return record
     except ValueError as exc:
         raise _handle_value_error(exc) from exc
 
 
 @router.put("/records/{record_id}")
-def update_record(record_id: int, key: str = Query(...), payload: dict = Body(...)):
+def update_record(
+    record_id: int,
+    key: str = Query(...),
+    table_set: str = Query("prod"),
+    payload: dict = Body(...),
+):
     config = _verify_key(key)
-    store = _get_store(config)
+    ts = _parse_table_set(table_set)
+    store = _get_store(config, ts)
     try:
         record = store.update_record(record_id, payload)
     except ValueError as exc:
         raise _handle_value_error(exc) from exc
     if not record:
         raise HTTPException(status_code=404, detail="record_not_found")
-    record = _persist_compare_snapshots(config, store, record)
+    record = _persist_compare_snapshots(config, store, record, table_set=ts)
     return record
 
 
 @router.patch("/records/{record_id}/include-in-stats")
-def patch_include_in_stats(record_id: int, key: str = Query(...), body: dict = Body(...)):
+def patch_include_in_stats(
+    record_id: int,
+    key: str = Query(...),
+    table_set: str = Query("prod"),
+    body: dict = Body(...),
+):
     """快速切换是否纳入统计（表格内勾选）。"""
     config = _verify_key(key)
-    store = _get_store(config)
+    ts = _parse_table_set(table_set)
+    store = _get_store(config, ts)
     if "include_in_stats" not in body:
         raise HTTPException(status_code=400, detail="missing_include_in_stats")
     record = store.update_include_in_stats(record_id, bool(body["include_in_stats"]))
@@ -412,18 +472,28 @@ def patch_include_in_stats(record_id: int, key: str = Query(...), body: dict = B
 
 
 @router.delete("/records/{record_id}")
-def delete_record(record_id: int, key: str = Query(...)):
+def delete_record(
+    record_id: int,
+    key: str = Query(...),
+    table_set: str = Query("prod"),
+):
     config = _verify_key(key)
-    store = _get_store(config)
+    ts = _parse_table_set(table_set)
+    store = _get_store(config, ts)
     if not store.delete_record(record_id):
         raise HTTPException(status_code=404, detail="record_not_found")
     return {"ok": True, "id": record_id}
 
 
 @router.post("/records/bulk-delete")
-def bulk_delete(key: str = Query(...), payload: dict = Body(...)):
+def bulk_delete(
+    key: str = Query(...),
+    table_set: str = Query("prod"),
+    payload: dict = Body(...),
+):
     config = _verify_key(key)
-    store = _get_store(config)
+    ts = _parse_table_set(table_set)
+    store = _get_store(config, ts)
     ids = payload.get("ids") or []
     if not isinstance(ids, list):
         raise HTTPException(status_code=400, detail="invalid_ids")
@@ -435,10 +505,74 @@ def bulk_delete(key: str = Query(...), payload: dict = Body(...)):
     return {"ok": True, "deleted": deleted}
 
 
-@router.get("/meta/options")
-def meta_options(key: str = Query(...)):
+@router.post("/records/copy-to-test")
+def copy_records_to_test(key: str = Query(...), payload: dict = Body(default={})):
+    """从正式记录表复制到测试记录表（不含快照，重识别时会重新生成）。"""
     config = _verify_key(key)
-    store = _get_store(config)
+    prod_store = _get_store(config, "prod")
+    test_store = _get_store(config, "test")
+    ids = payload.get("ids")
+    if ids is not None:
+        if not isinstance(ids, list):
+            raise HTTPException(status_code=400, detail="invalid_ids")
+        try:
+            ids = [int(i) for i in ids]
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="invalid_ids") from exc
+        if not ids:
+            raise HTTPException(status_code=400, detail="empty_ids")
+    result = test_store.copy_records_from(prod_store, ids)
+    return {"ok": True, **result}
+
+
+@router.post("/records/bulk-recognize")
+def bulk_recognize_records(
+    key: str = Query(...),
+    table_set: str = Query("test", description="默认 test；可对正式/测试表批量重识别"),
+    payload: dict = Body(...),
+):
+    """批量重识别：对选中记录用当前算法重新识别并写回。"""
+    config = _verify_key(key)
+    ts = _parse_table_set(table_set)
+    store = _get_store(config, ts)
+    ids = payload.get("ids") or []
+    if not isinstance(ids, list):
+        raise HTTPException(status_code=400, detail="invalid_ids")
+    try:
+        id_list = [int(i) for i in ids]
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="invalid_ids") from exc
+    if not id_list:
+        raise HTTPException(status_code=400, detail="empty_ids")
+
+    overwrite_record = bool(payload.get("overwrite_record", True))
+    overwrite_snapshots = bool(payload.get("overwrite_snapshots", True))
+    if not overwrite_record and not overwrite_snapshots:
+        raise HTTPException(status_code=400, detail="nothing_to_overwrite")
+
+    try:
+        return bulk_apply_record_recognition(
+            id_list,
+            store,
+            config,
+            CONFIG_PATH,
+            IMG_ROOT,
+            _debug_output_root(config),
+            _experiment_snapshot_root(config, ts),
+            overwrite_record=overwrite_record,
+            overwrite_snapshots=overwrite_snapshots,
+            skip_quality=payload.get("skip_quality"),
+            closeup_mode=payload.get("mode") or "auto",
+        )
+    except ValueError as exc:
+        raise _handle_value_error(exc) from exc
+
+
+@router.get("/meta/options")
+def meta_options(key: str = Query(...), table_set: str = Query("prod")):
+    config = _verify_key(key)
+    ts = _parse_table_set(table_set)
+    store = _get_store(config, ts)
     return store.get_distinct_options()
 
 
@@ -544,16 +678,31 @@ def get_experiment_snapshot(
     filename: str,
     key: str = Query(...),
 ):
-    """读取实验记录持久化的调色前/后快照或审计 JSON。"""
+    """读取实验记录持久化的调色前/后快照或审计 JSON（正式表）。"""
+    return _get_experiment_snapshot(record_id, filename, key, table_set="prod")
+
+
+@router.get("/test/snapshots/{record_id}/{filename}")
+def get_test_experiment_snapshot(
+    record_id: int,
+    filename: str,
+    key: str = Query(...),
+):
+    """读取测试记录表持久化的调色前/后快照或审计 JSON。"""
+    return _get_experiment_snapshot(record_id, filename, key, table_set="test")
+
+
+def _get_experiment_snapshot(record_id: int, filename: str, key: str, *, table_set: str):
     config = _verify_key(key)
+    ts = _parse_table_set(table_set)
     allowed = ("before.jpg", "after.jpg", COMPARE_AUDIT_FILENAME)
     if filename not in allowed:
         raise HTTPException(status_code=400, detail="invalid_snapshot_file")
-    path = _experiment_snapshot_root(config) / str(record_id) / filename
+    path = _experiment_snapshot_root(config, ts) / str(record_id) / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="snapshot_not_found")
     if filename == COMPARE_AUDIT_FILENAME:
-        audit = load_compare_audit(_experiment_snapshot_root(config), record_id)
+        audit = load_compare_audit(_experiment_snapshot_root(config, ts), record_id)
         if not audit:
             raise HTTPException(status_code=404, detail="audit_not_found")
         return enrich_audit_with_current_standards(audit, config)
@@ -567,11 +716,13 @@ def _grade_boundaries(config: dict) -> list[float]:
 @router.post("/stats/stability")
 def stability_stats(
     key: str = Query(...),
+    table_set: str = Query("prod"),
     body: dict = Body(default={}),
 ):
     """L* 离散度稳定性分析（支持范围筛选，供管理页图表使用）。"""
     config = _verify_key(key)
-    store = _get_store(config)
+    ts = _parse_table_set(table_set)
+    store = _get_store(config, ts)
     records = store.list_records()
     boundaries = _grade_boundaries(config)
 
@@ -632,4 +783,5 @@ def stability_stats(
     )
     report["source_count"] = len(records)
     report["filtered_count"] = len(filtered)
+    report["table_set"] = ts
     return report

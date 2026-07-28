@@ -29,12 +29,15 @@
   }
   .exp-table.el-table td.el-table__cell { padding: 4px 0; font-size: 13px; }
   .exp-table.el-table .cell { padding-left: 8px; padding-right: 8px; }
-  /* 多选列：仅数据行居中；隐藏表头全选框，避免误触全选 */
-  .exp-table.el-table td.el-table-column--selection .cell {
+  /* 多选列：数据行与表头居中显示勾选框 */
+  .exp-table.el-table td.el-table-column--selection .cell,
+  .exp-table.el-table th.el-table-column--selection .cell {
     display: flex; align-items: center; justify-content: center; padding: 0;
   }
-  .exp-table.el-table th.el-table-column--selection .cell { padding: 0; }
-  .exp-table.el-table th.el-table-column--selection .el-checkbox { display: none; }
+  .exp-table.el-table td.el-table-column--selection .el-checkbox,
+  .exp-table.el-table th.el-table-column--selection .el-checkbox {
+    height: auto;
+  }
   .exp-table.el-table td.exp-stats-toggle .cell {
     display: flex; align-items: center; justify-content: center; padding: 0;
   }
@@ -172,6 +175,10 @@
     margin-top: 8px; border: 1px solid #e5e7eb; border-radius: 6px; max-width: 100%;
     background: #0f172a;
   }
+  .table-set-tabs { margin-right: 8px; }
+  .bulk-progress-list { max-height: 280px; overflow-y: auto; font-size: 12px; line-height: 1.7; }
+  .bulk-progress-list .ok { color: #15803d; }
+  .bulk-progress-list .fail { color: #b91c1c; }
   @media (max-width: 768px) {
     .recognize-body { grid-template-columns: 1fr; }
   }
@@ -188,14 +195,31 @@
     <!-- 顶栏：对齐 business OrderManagement -->
     <div class="view-header">
       <span class="title">实验记录</span>
-      <span style="font-size:12px;color:#909399">本窗口由 Debug 台复用，多次导入会刷新表单</span>
-      <el-button type="success" size="small" plain @click="openImportDialog">从 Debug 导入</el-button>
+      <el-radio-group v-model="recordTableSet" size="small" class="table-set-tabs" @change="onTableSetChange">
+        <el-radio-button value="prod">正式记录</el-radio-button>
+        <el-radio-button value="test">测试记录</el-radio-button>
+      </el-radio-group>
+      <span style="font-size:12px;color:#909399" v-if="isTestTable">测试表：可批量重识别，不影响正式数据</span>
+      <span style="font-size:12px;color:#909399" v-else>本窗口由 Debug 台复用，多次导入会刷新表单</span>
+      <el-button v-if="!isTestTable" type="success" size="small" plain @click="openImportDialog">从 Debug 导入</el-button>
+      <el-button v-if="!isTestTable" type="warning" size="small" plain :disabled="!selectedIds.length" @click="copySelectedToTest">
+        复制选中到测试表<span v-if="selectedIds.length"> ({{ selectedIds.length }})</span>
+      </el-button>
+      <el-button v-if="!isTestTable" type="warning" size="small" plain @click="copyAllToTest">复制全部到测试表</el-button>
       <el-button type="primary" size="small" plain @click="openGradeStats">等级统计</el-button>
       <el-button type="primary" size="small" plain @click="openStabilityStats">L* 稳定性</el-button>
-      <el-button type="primary" size="small" @click="openCreate">新建记录</el-button>
+      <el-button v-if="!isTestTable" type="primary" size="small" @click="openCreate">新建记录</el-button>
+      <el-button v-if="isTestTable" type="success" size="small" :disabled="!selectedIds.length" :loading="bulkRecognizeLoading" @click="bulkRecognize">
+        批量重识别<span v-if="selectedIds.length"> ({{ selectedIds.length }})</span>
+      </el-button>
       <el-button type="danger" size="small" plain :disabled="!selectedIds.length" @click="bulkDelete">
         批量删除<span v-if="selectedIds.length"> ({{ selectedIds.length }})</span>
       </el-button>
+      <el-divider direction="vertical" />
+      <el-button size="small" plain @click="selectAllFiltered" :disabled="!filteredRecords.length">全选筛选</el-button>
+      <el-button size="small" plain @click="selectAllPaged" :disabled="!pagedRecords.length">全选本页</el-button>
+      <el-button size="small" plain @click="clearSelection" :disabled="!selectedIds.length">取消全选</el-button>
+      <span v-if="selectedIds.length" style="font-size:12px;color:#409eff">已选 {{ selectedIds.length }} 条</span>
       <div class="spacer"></div>
       <el-button size="small" plain @click="resetAllFilters" :disabled="!hasActiveFilters && !hasActiveSort">重置所有筛选</el-button>
       <el-input v-model="globalSearch" placeholder="全局搜索..." size="small" clearable style="width:200px" />
@@ -220,6 +244,7 @@
             @row-dblclick="openEdit"
             empty-text="暂无记录，点击「新建记录」添加"
           >
+            <el-table-column type="selection" width="52" align="center" fixed="left" reserve-selection />
             <el-table-column width="56" align="center" fixed="left" class-name="exp-stats-toggle" label-class-name="exp-stats-toggle">
               <template v-slot:header>
                 <exp-filter-header title="统计" field="include_in_stats" :fixed-options="boolOptions"
@@ -235,7 +260,6 @@
                 />
               </template>
             </el-table-column>
-            <el-table-column type="selection" width="48" align="center" fixed="left" />
             <el-table-column prop="id" width="72" align="center" fixed="left">
               <template v-slot:header>
                 <exp-filter-header title="ID" field="id" type="number"
@@ -415,6 +439,10 @@
         <div class="status-bar">
           <div class="left">
             <span class="count">{{ pagedRecords.length }} / {{ filteredRecords.length }} 条<span v-if="filteredRecords.length !== allRecords.length">（共 {{ allRecords.length }} 条）</span></span>
+            <span v-if="selectedIds.length" class="count" style="color:#409eff">· 已选 {{ selectedIds.length }} 条</span>
+            <el-button size="small" plain @click="selectAllFiltered" :disabled="!filteredRecords.length">全选筛选</el-button>
+            <el-button size="small" plain @click="selectAllPaged" :disabled="!pagedRecords.length">全选本页</el-button>
+            <el-button size="small" plain @click="clearSelection" :disabled="!selectedIds.length">取消全选</el-button>
             <el-button type="warning" size="small" plain @click="resetAllFilters" :disabled="!hasActiveFilters && !hasActiveSort">重置所有筛选</el-button>
           </div>
           <div class="right">
@@ -701,7 +729,7 @@
     </el-dialog>
 
     <!-- 等级统计 -->
-    <el-dialog v-model="statsDialogVisible" title="调色前 / 调色后等级统计" width="960px" top="4vh" destroy-on-close @opened="onStatsDialogOpened">
+    <el-dialog v-model="statsDialogVisible" :title="'调色前 / 调色后等级统计（' + (isTestTable ? '测试表' : '正式表') + '）'" width="960px" top="4vh" destroy-on-close @opened="onStatsDialogOpened">
       <el-tabs v-model="statsMainTab" @tab-change="onStatsTabChange">
         <el-tab-pane label="数量统计" name="count">
           <div class="stats-toolbar">
@@ -801,7 +829,7 @@
     </el-dialog>
 
     <!-- L* 稳定性统计 -->
-    <el-dialog v-model="stabilityDialogVisible" title="L* 稳定性分析" width="980px" top="3vh" destroy-on-close @opened="onStabilityDialogOpened">
+    <el-dialog v-model="stabilityDialogVisible" :title="'L* 稳定性分析（' + (isTestTable ? '测试表' : '正式表') + '）'" width="980px" top="3vh" destroy-on-close @opened="onStabilityDialogOpened">
       <div class="stability-toolbar">
         <span style="font-size:12px;color:#475569">实验人：</span>
         <el-select v-model="stabilityOperators" multiple collapse-tags collapse-tags-tooltip placeholder="全部" size="small" style="width:150px" clearable>
@@ -818,7 +846,7 @@
         <span style="font-size:12px;color:#475569">小组最少 n：</span>
         <el-input-number v-model="stabilityMinN" :min="2" :max="20" size="small" style="width:88px" />
         <el-button type="primary" size="small" :loading="stabilityLoading" @click="refreshStabilityStats">重新计算</el-button>
-        <span class="hint">统计全库记录，可按实验人 / 大组 / 小组筛选；已排除「不纳入统计」记录；grade 边界 {{ (stabilityReport.boundaries || []).join(', ') }}</span>
+        <span class="hint">统计当前{{ isTestTable ? '测试' : '正式' }}表记录，可按实验人 / 大组 / 小组筛选；已排除「不纳入统计」记录；grade 边界 {{ (stabilityReport.boundaries || []).join(', ') }}</span>
       </div>
       <div v-if="stabilityScatterSummary.n" class="stability-summary">
         有效记录 <strong>{{ stabilityScatterSummary.n }}</strong> 条
@@ -879,6 +907,23 @@
           <div ref="chartBoundaryRef" class="stability-chart stability-chart-sm" v-loading="stabilityLoading"></div>
         </el-tab-pane>
       </el-tabs>
+    </el-dialog>
+
+    <el-dialog v-model="bulkRecognizeDialogVisible" title="批量重识别进度" width="520px" :close-on-click-modal="false" :show-close="!bulkRecognizeLoading">
+      <div v-if="bulkRecognizeLoading" style="margin-bottom:12px;font-size:13px;color:#606266">
+        正在处理 {{ bulkRecognizeProgress.done }} / {{ bulkRecognizeProgress.total }} …
+      </div>
+      <div v-else style="margin-bottom:12px;font-size:13px;color:#606266">
+        完成：成功 {{ bulkRecognizeProgress.succeeded }}，失败 {{ bulkRecognizeProgress.failed }}
+      </div>
+      <div class="bulk-progress-list">
+        <div v-for="item in bulkRecognizeResults" :key="item.id" :class="item.ok ? 'ok' : 'fail'">
+          #{{ item.id }} — {{ item.ok ? '成功' : ('失败：' + (item.error || 'unknown')) }}
+        </div>
+      </div>
+      <template #footer>
+        <el-button type="primary" :disabled="bulkRecognizeLoading" @click="bulkRecognizeDialogVisible = false">关闭</el-button>
+      </template>
     </el-dialog>
   </template>
 </div>
@@ -1166,6 +1211,12 @@
       const libsReady = ref(true);
       const params = new URLSearchParams(location.search);
       const apiKey = ref(localStorage.getItem('exp_api_key') || params.get('key') || 'iris-color-dev');
+      const recordTableSet = ref(localStorage.getItem('exp_table_set') || 'prod');
+      const isTestTable = computed(() => recordTableSet.value === 'test');
+      const tableSetQuery = computed(() => ({ table_set: recordTableSet.value }));
+      const snapshotUrlPrefix = computed(() =>
+        isTestTable.value ? '/experiments/test/snapshots/' : '/experiments/snapshots/'
+      );
       const allRecords = ref([]);
       const loading = ref(false);
       const saving = ref(false);
@@ -1239,6 +1290,11 @@
       const chartGradeAfterRef = ref(null);
       const chartInstances = {};
       let skipSubgroupDefaults = false;
+      let selectionSyncing = false;
+      const bulkRecognizeLoading = ref(false);
+      const bulkRecognizeDialogVisible = ref(false);
+      const bulkRecognizeResults = ref([]);
+      const bulkRecognizeProgress = reactive({ done: 0, total: 0, succeeded: 0, failed: 0 });
 
       const statDimOptions = STAT_DIM_OPTIONS;
       const activeStatDims = computed(() =>
@@ -1292,6 +1348,7 @@
       };
 
       watch(apiKey, v => localStorage.setItem('exp_api_key', v));
+      watch(recordTableSet, v => localStorage.setItem('exp_table_set', v));
 
       const drawerTitle = computed(() => editingId.value ? '编辑记录 #' + editingId.value : '新建记录');
 
@@ -1803,7 +1860,11 @@
           if (stabilityOperators.value.length) body.operators = [...stabilityOperators.value];
           if (stabilityGroups.value.length) body.group_names = [...stabilityGroups.value];
           if (stabilitySubgroups.value.length) body.subgroup_names = [...stabilitySubgroups.value];
-          const data = await apiFetch('/experiments/stats/stability', { method: 'POST', body });
+          const data = await apiFetch('/experiments/stats/stability', {
+            method: 'POST',
+            query: { ...tableSetQuery.value },
+            body,
+          });
           Object.keys(stabilityReport).forEach(k => delete stabilityReport[k]);
           Object.assign(stabilityReport, data);
           renderStabilityCharts();
@@ -1930,11 +1991,17 @@
         }
         return res.status === 204 ? null : res.json();
       }
+      async function apiFetchRecords(path, opts = {}) {
+        return apiFetch(path, {
+          ...opts,
+          query: { ...tableSetQuery.value, ...(opts.query || {}) },
+        });
+      }
 
       async function loadRecords() {
         loading.value = true;
         try {
-          const data = await apiFetch('/experiments/records');
+          const data = await apiFetchRecords('/experiments/records');
           allRecords.value = Array.isArray(data.records) ? data.records : [];
           const pick = f => [...new Set(allRecords.value.map(r => r[f]).filter(Boolean))].sort();
           distinct.operator = pick('operator');
@@ -1947,6 +2014,84 @@
         }
       }
       async function refreshAll() { await loadRecords(); }
+
+      async function onTableSetChange() {
+        selectedIds.value = [];
+        tableRef.value?.clearSelection?.();
+        resetAllFilters();
+        await loadRecords();
+      }
+
+      async function copySelectedToTest() {
+        if (!selectedIds.value.length) return;
+        try {
+          await ElMessageBox.confirm(
+            '将正式表中选中的 ' + selectedIds.value.length + ' 条记录复制到测试表？',
+            '复制到测试表',
+            { type: 'info' }
+          );
+          const data = await apiFetch('/experiments/records/copy-to-test', {
+            method: 'POST',
+            body: { ids: selectedIds.value },
+          });
+          ElMessage.success('已复制 ' + (data.copied || 0) + ' 条到测试表');
+        } catch (e) { if (e !== 'cancel' && e !== 'close') ElMessage.error(e.message || e); }
+      }
+
+      async function copyAllToTest() {
+        try {
+          await ElMessageBox.confirm(
+            '将正式表全部记录复制到测试表？（测试表会新增副本，不会清空已有测试记录）',
+            '复制全部到测试表',
+            { type: 'warning' }
+          );
+          const data = await apiFetch('/experiments/records/copy-to-test', { method: 'POST', body: {} });
+          ElMessage.success('已复制 ' + (data.copied || 0) + ' 条到测试表');
+        } catch (e) { if (e !== 'cancel' && e !== 'close') ElMessage.error(e.message || e); }
+      }
+
+      async function bulkRecognize() {
+        if (!selectedIds.value.length) return;
+        try {
+          await ElMessageBox.confirm(
+            '对选中的 ' + selectedIds.value.length + ' 条测试记录用当前算法批量重识别并写回？',
+            '批量重识别',
+            { type: 'warning' }
+          );
+        } catch (e) { if (e === 'cancel' || e === 'close') return; }
+
+        bulkRecognizeLoading.value = true;
+        bulkRecognizeDialogVisible.value = true;
+        bulkRecognizeResults.value = [];
+        Object.assign(bulkRecognizeProgress, {
+          done: 0,
+          total: selectedIds.value.length,
+          succeeded: 0,
+          failed: 0,
+        });
+        try {
+          const data = await apiFetchRecords('/experiments/records/bulk-recognize', {
+            method: 'POST',
+            body: {
+              ids: selectedIds.value,
+              overwrite_record: true,
+              overwrite_snapshots: true,
+            },
+          });
+          bulkRecognizeResults.value = data.results || [];
+          bulkRecognizeProgress.done = data.total || selectedIds.value.length;
+          bulkRecognizeProgress.succeeded = data.succeeded || 0;
+          bulkRecognizeProgress.failed = data.failed || 0;
+          ElMessage.success('批量重识别完成：成功 ' + bulkRecognizeProgress.succeeded + '，失败 ' + bulkRecognizeProgress.failed);
+          selectedIds.value = [];
+          tableRef.value?.clearSelection?.();
+          await loadRecords();
+        } catch (e) {
+          ElMessage.error('批量重识别失败：' + (e.message || e));
+        } finally {
+          bulkRecognizeLoading.value = false;
+        }
+      }
 
       function openDebugUi() { window.open(debugUiUrl.value, '_blank'); }
       function openDebugViewer(runId) {
@@ -2188,7 +2333,7 @@
           if (useManual && recognizeManualState) {
             body.manual_params = { ...recognizeManualState };
           }
-          const data = await apiFetch('/experiments/records/' + recognizeTarget.value.id + '/recognize', {
+          const data = await apiFetchRecords('/experiments/records/' + recognizeTarget.value.id + '/recognize', {
             method: 'POST',
             body,
           });
@@ -2240,7 +2385,7 @@
           if (recognizeLastManual.value && recognizeManualState) {
             body.manual_params = { ...recognizeManualState };
           }
-          const data = await apiFetch('/experiments/records/' + recognizeTarget.value.id + '/recognize/apply', {
+          const data = await apiFetchRecords('/experiments/records/' + recognizeTarget.value.id + '/recognize/apply', {
             method: 'POST',
             body,
           });
@@ -2280,8 +2425,8 @@
         const key = encodeURIComponent(apiKey.value);
         if (row.image_before_rel && row.image_after_rel && row.id) {
           return {
-            before: '/experiments/snapshots/' + row.id + '/before.jpg?key=' + key,
-            after: '/experiments/snapshots/' + row.id + '/after.jpg?key=' + key,
+            before: snapshotUrlPrefix.value + row.id + '/before.jpg?key=' + key,
+            after: snapshotUrlPrefix.value + row.id + '/after.jpg?key=' + key,
           };
         }
         if (row.debug_run_id) {
@@ -2301,7 +2446,7 @@
         compareLoadingId.value = row.id;
         compareLoading.value = true;
         try {
-          const data = await apiFetch('/experiments/records/' + row.id + '/ensure-compare-images', { method: 'POST' });
+          const data = await apiFetchRecords('/experiments/records/' + row.id + '/ensure-compare-images', { method: 'POST' });
           const idx = allRecords.value.findIndex(r => r.id === row.id);
           const patch = {
             image_before_rel: data.image_before_rel,
@@ -2583,8 +2728,8 @@
       function setEditPreview(row) {
         const key = encodeURIComponent(apiKey.value);
         if (row.image_before_rel && row.image_after_rel) {
-          importPreview.before_url = '/experiments/snapshots/' + row.id + '/before.jpg?key=' + key;
-          importPreview.after_url = '/experiments/snapshots/' + row.id + '/after.jpg?key=' + key;
+          importPreview.before_url = snapshotUrlPrefix.value + row.id + '/before.jpg?key=' + key;
+          importPreview.after_url = snapshotUrlPrefix.value + row.id + '/after.jpg?key=' + key;
           importPreview.compare_url = '';
           importPreview.thumb_url = row.image_rel
             ? '/debug/img/file?rel=' + encodeURIComponent(row.image_rel) + '&key=' + key
@@ -2638,10 +2783,10 @@
         try {
           const isEdit = !!editingId.value;
           if (isEdit) {
-            await apiFetch('/experiments/records/' + editingId.value, { method:'PUT', body: payload });
+            await apiFetchRecords('/experiments/records/' + editingId.value, { method:'PUT', body: payload });
             ElMessage.success('已更新');
           } else {
-            await apiFetch('/experiments/records', { method:'POST', body: payload });
+            await apiFetchRecords('/experiments/records', { method:'POST', body: payload });
             ElMessage.success('已创建');
             try {
               new BroadcastChannel('iris-experiment-sync').postMessage({
@@ -2670,7 +2815,7 @@
         includeStatsSavingId.value = row.id;
         row.include_in_stats = include;
         try {
-          const updated = await apiFetch('/experiments/records/' + row.id + '/include-in-stats', {
+          const updated = await apiFetchRecords('/experiments/records/' + row.id + '/include-in-stats', {
             method: 'PATCH',
             body: { include_in_stats: include },
           });
@@ -2692,7 +2837,7 @@
       async function deleteOne(row) {
         try {
           await ElMessageBox.confirm('确定删除记录 #' + row.id + '？', '确认', { type:'warning' });
-          await apiFetch('/experiments/records/' + row.id, { method:'DELETE' });
+          await apiFetchRecords('/experiments/records/' + row.id, { method:'DELETE' });
           ElMessage.success('已删除');
           await loadRecords();
         } catch (e) { if (e !== 'cancel' && e !== 'close') ElMessage.error(e.message||e); }
@@ -2702,7 +2847,7 @@
         if (!selectedIds.value.length) return;
         try {
           await ElMessageBox.confirm('确定删除 ' + selectedIds.value.length + ' 条？', '批量删除', { type:'warning' });
-          await apiFetch('/experiments/records/bulk-delete', { method:'POST', body:{ ids: selectedIds.value } });
+          await apiFetchRecords('/experiments/records/bulk-delete', { method:'POST', body:{ ids: selectedIds.value } });
           ElMessage.success('已删除');
           selectedIds.value = [];
           tableRef.value?.clearSelection?.();
@@ -2710,11 +2855,43 @@
         } catch (e) { if (e !== 'cancel' && e !== 'close') ElMessage.error(e.message||e); }
       }
 
-      function onSelectionChange(rows) { selectedIds.value = rows.map(r => r.id); }
+      function onSelectionChange(rows) {
+        if (selectionSyncing) return;
+        selectedIds.value = rows.map(r => r.id);
+      }
       function fmtLstar(v) { return v == null || v === '' ? '—' : Number(v).toFixed(2); }
       function fmtBool(v) { return v ? '是' : '否'; }
 
       watch(globalSearch, () => { displayLimit.value = pageSize.value; });
+      watch(pagedRecords, () => {
+        if (selectedIds.value.length) nextTick(() => syncTableSelectionFromIds());
+      });
+
+      function syncTableSelectionFromIds() {
+        if (!tableRef.value) return;
+        selectionSyncing = true;
+        tableRef.value.clearSelection();
+        const set = new Set(selectedIds.value);
+        pagedRecords.value.forEach(row => {
+          if (set.has(row.id)) tableRef.value.toggleRowSelection(row, true);
+        });
+        nextTick(() => { selectionSyncing = false; });
+      }
+
+      function selectAllFiltered() {
+        selectedIds.value = filteredRecords.value.map(r => r.id);
+        nextTick(() => syncTableSelectionFromIds());
+      }
+
+      function selectAllPaged() {
+        if (!tableRef.value) return;
+        tableRef.value.toggleAllSelection();
+      }
+
+      function clearSelection() {
+        selectedIds.value = [];
+        tableRef.value?.clearSelection?.();
+      }
 
       onBeforeUnmount(() => disposeStabilityCharts());
 
@@ -2725,7 +2902,7 @@
       });
 
       return {
-        libsReady, apiKey, allRecords, loading, saving, selectedIds, drawerVisible, drawerTitle,
+        libsReady, apiKey, recordTableSet, isTestTable, allRecords, loading, saving, selectedIds, drawerVisible, drawerTitle,
         form, formRef, tableRef, formRules, distinct, globalSearch, columnFilters, sortState,
         pageSize, displayLimit, filteredRecords, pagedRecords, canLoadMore, hasActiveFilters, hasActiveSort,
         gradeOptions, colorOptions, boolOptions, blueColors, greenColors, brownColors,
@@ -2741,11 +2918,14 @@
         stabilityScatterSummary, stabilityOperatorOptions, stabilityGroupOptions, stabilitySubgroupOptions,
         chartScatterRef, chartWithinRef, chartPersonRef, chartCrossRef, chartBoundaryRef,
         openStabilityStats, refreshStabilityStats, renderStabilityCharts, onStabilityDialogOpened, onStabilityGroupChange,
-        refreshAll, openCreate, openEdit, saveForm, deleteOne, bulkDelete, suggestNames,
+        refreshAll, onTableSetChange, copySelectedToTest, copyAllToTest,
+        bulkRecognizeLoading, bulkRecognizeDialogVisible, bulkRecognizeResults, bulkRecognizeProgress, bulkRecognize,
+        openCreate, openEdit, saveForm, deleteOne, bulkDelete, suggestNames,
         openGradeStats, refreshGradeStats, gradeShort, gradeCountSum, formatStatDim,
         suggestOperator, suggestCamera, suggestLight, suggestColor, suggestGrade,
         suggestGroupName, suggestSubgroupName, onGroupSubgroupChange,
         onSelectionChange, fmtLstar, fmtBool, toggleIncludeInStats, includeStatsSavingId, onHeaderSort, onHeaderFilter,
+        selectAllFiltered, selectAllPaged, clearSelection,
         resetAllFilters, loadMore, onPageSizeChange,
         openImportDialog, importFromRun, openDebugUi, openDebugViewer, openImagePreview,
         canCompare, canRecognize, openCompareDialog, openCompareFromForm, openCompareDialogFromPreview, onPreviewCompareError, onDialogCompareError,

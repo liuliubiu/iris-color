@@ -111,8 +111,96 @@ CREATE INDEX IF NOT EXISTS idx_exp_date ON experiment_records(experiment_date);
 CREATE INDEX IF NOT EXISTS idx_exp_operator ON experiment_records(operator);
 """
 
+TABLE_PROD = "experiment_records"
+TABLE_TEST = "experiment_records_test"
+ALLOWED_TABLES = frozenset({TABLE_PROD, TABLE_TEST})
+
+_COPY_FIELDS = (
+    "group_name",
+    "subgroup_name",
+    "experiment_date",
+    "operator",
+    "camera_device",
+    "light_device",
+    "illuminance",
+    "color",
+    "grade_before",
+    "lstar_before",
+    "grade_after",
+    "lstar_after",
+    "notes",
+    "image_rel",
+    "debug_run_id",
+    "skip_quality",
+    "manual_adjusted",
+    "include_in_stats",
+)
+
 _MYSQL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS experiment_records (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    group_name VARCHAR(32) NOT NULL,
+    subgroup_name VARCHAR(16) NULL,
+    experiment_date DATE NOT NULL,
+    operator VARCHAR(64) NOT NULL,
+    camera_device VARCHAR(128) NULL,
+    light_device VARCHAR(128) NULL,
+    illuminance INT NULL,
+    color VARCHAR(16) NULL,
+    grade_before VARCHAR(16) NULL,
+    lstar_before DOUBLE NULL,
+    grade_after VARCHAR(16) NULL,
+    lstar_after DOUBLE NULL,
+    notes TEXT NULL,
+    image_rel VARCHAR(512) NULL,
+    debug_run_id VARCHAR(32) NULL,
+    skip_quality TINYINT(1) NOT NULL DEFAULT 0,
+    manual_adjusted TINYINT(1) NOT NULL DEFAULT 0,
+    include_in_stats TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_exp_group (group_name),
+    INDEX idx_exp_date (experiment_date),
+    INDEX idx_exp_operator (operator)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+"""
+
+
+def _sqlite_schema_for(table: str) -> str:
+    suffix = "_test" if table == TABLE_TEST else ""
+    return f"""
+CREATE TABLE IF NOT EXISTS {table} (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_name TEXT NOT NULL,
+    subgroup_name TEXT,
+    experiment_date TEXT NOT NULL,
+    operator TEXT NOT NULL,
+    camera_device TEXT,
+    light_device TEXT,
+    illuminance INTEGER,
+    color TEXT,
+    grade_before TEXT,
+    lstar_before REAL,
+    grade_after TEXT,
+    lstar_after REAL,
+    notes TEXT,
+    image_rel TEXT,
+    debug_run_id TEXT,
+    skip_quality INTEGER NOT NULL DEFAULT 0,
+    manual_adjusted INTEGER NOT NULL DEFAULT 0,
+    include_in_stats INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_exp_group{suffix} ON {table}(group_name);
+CREATE INDEX IF NOT EXISTS idx_exp_date{suffix} ON {table}(experiment_date);
+CREATE INDEX IF NOT EXISTS idx_exp_operator{suffix} ON {table}(operator);
+"""
+
+
+def _mysql_schema_for(table: str) -> str:
+    return f"""
+CREATE TABLE IF NOT EXISTS {table} (
     id INT AUTO_INCREMENT PRIMARY KEY,
     group_name VARCHAR(32) NOT NULL,
     subgroup_name VARCHAR(16) NULL,
@@ -169,47 +257,47 @@ def _parse_subgroup_seq(subgroup_name: str) -> int:
     return 0
 
 
-def _sqlite_migrate(conn: sqlite3.Connection) -> None:
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(experiment_records)")}
+def _sqlite_migrate(conn: sqlite3.Connection, table: str = TABLE_PROD) -> None:
+    cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
     if "image_rel" not in cols:
-        conn.execute("ALTER TABLE experiment_records ADD COLUMN image_rel TEXT")
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN image_rel TEXT")
     if "debug_run_id" not in cols:
-        conn.execute("ALTER TABLE experiment_records ADD COLUMN debug_run_id TEXT")
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN debug_run_id TEXT")
     if "image_before_rel" not in cols:
-        conn.execute("ALTER TABLE experiment_records ADD COLUMN image_before_rel TEXT")
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN image_before_rel TEXT")
     if "image_after_rel" not in cols:
-        conn.execute("ALTER TABLE experiment_records ADD COLUMN image_after_rel TEXT")
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN image_after_rel TEXT")
     if "skip_quality" not in cols:
-        conn.execute("ALTER TABLE experiment_records ADD COLUMN skip_quality INTEGER NOT NULL DEFAULT 0")
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN skip_quality INTEGER NOT NULL DEFAULT 0")
     if "manual_adjusted" not in cols:
-        conn.execute("ALTER TABLE experiment_records ADD COLUMN manual_adjusted INTEGER NOT NULL DEFAULT 0")
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN manual_adjusted INTEGER NOT NULL DEFAULT 0")
     if "include_in_stats" not in cols:
-        conn.execute("ALTER TABLE experiment_records ADD COLUMN include_in_stats INTEGER NOT NULL DEFAULT 1")
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN include_in_stats INTEGER NOT NULL DEFAULT 1")
 
 
-def _mysql_migrate(conn) -> None:
+def _mysql_migrate(conn, table: str = TABLE_PROD) -> None:
     with conn.cursor() as cur:
-        cur.execute("SHOW COLUMNS FROM experiment_records LIKE 'image_rel'")
+        cur.execute(f"SHOW COLUMNS FROM {table} LIKE 'image_rel'")
         if not cur.fetchone():
-            cur.execute("ALTER TABLE experiment_records ADD COLUMN image_rel VARCHAR(512) NULL")
-        cur.execute("SHOW COLUMNS FROM experiment_records LIKE 'debug_run_id'")
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN image_rel VARCHAR(512) NULL")
+        cur.execute(f"SHOW COLUMNS FROM {table} LIKE 'debug_run_id'")
         if not cur.fetchone():
-            cur.execute("ALTER TABLE experiment_records ADD COLUMN debug_run_id VARCHAR(32) NULL")
-        cur.execute("SHOW COLUMNS FROM experiment_records LIKE 'image_before_rel'")
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN debug_run_id VARCHAR(32) NULL")
+        cur.execute(f"SHOW COLUMNS FROM {table} LIKE 'image_before_rel'")
         if not cur.fetchone():
-            cur.execute("ALTER TABLE experiment_records ADD COLUMN image_before_rel VARCHAR(512) NULL")
-        cur.execute("SHOW COLUMNS FROM experiment_records LIKE 'image_after_rel'")
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN image_before_rel VARCHAR(512) NULL")
+        cur.execute(f"SHOW COLUMNS FROM {table} LIKE 'image_after_rel'")
         if not cur.fetchone():
-            cur.execute("ALTER TABLE experiment_records ADD COLUMN image_after_rel VARCHAR(512) NULL")
-        cur.execute("SHOW COLUMNS FROM experiment_records LIKE 'skip_quality'")
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN image_after_rel VARCHAR(512) NULL")
+        cur.execute(f"SHOW COLUMNS FROM {table} LIKE 'skip_quality'")
         if not cur.fetchone():
-            cur.execute("ALTER TABLE experiment_records ADD COLUMN skip_quality TINYINT(1) NOT NULL DEFAULT 0")
-        cur.execute("SHOW COLUMNS FROM experiment_records LIKE 'manual_adjusted'")
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN skip_quality TINYINT(1) NOT NULL DEFAULT 0")
+        cur.execute(f"SHOW COLUMNS FROM {table} LIKE 'manual_adjusted'")
         if not cur.fetchone():
-            cur.execute("ALTER TABLE experiment_records ADD COLUMN manual_adjusted TINYINT(1) NOT NULL DEFAULT 0")
-        cur.execute("SHOW COLUMNS FROM experiment_records LIKE 'include_in_stats'")
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN manual_adjusted TINYINT(1) NOT NULL DEFAULT 0")
+        cur.execute(f"SHOW COLUMNS FROM {table} LIKE 'include_in_stats'")
         if not cur.fetchone():
-            cur.execute("ALTER TABLE experiment_records ADD COLUMN include_in_stats TINYINT(1) NOT NULL DEFAULT 1")
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN include_in_stats TINYINT(1) NOT NULL DEFAULT 1")
     conn.commit()
 
 
@@ -243,6 +331,22 @@ class ExperimentStore(ABC):
 
     @abstractmethod
     def bulk_delete(self, ids: list[int]) -> int: ...
+
+    def copy_records_from(
+        self,
+        source: "ExperimentStore",
+        ids: Optional[list[int]] = None,
+    ) -> dict[str, Any]:
+        """从源表复制记录到当前表（不含 id 与快照路径）。"""
+        records = source.list_records()
+        if ids is not None:
+            id_set = {int(i) for i in ids}
+            records = [r for r in records if int(r.get("id") or 0) in id_set]
+        created: list[dict[str, Any]] = []
+        for row in records:
+            payload = {field: row.get(field) for field in _COPY_FIELDS}
+            created.append(self.create_record(payload))
+        return {"copied": len(created), "records": created}
 
     @abstractmethod
     def get_distinct_options(self) -> dict[str, list[str]]: ...
@@ -371,12 +475,15 @@ class ExperimentStore(ABC):
 
 
 class SqliteExperimentStore(ExperimentStore):
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, table_name: str = TABLE_PROD) -> None:
+        if table_name not in ALLOWED_TABLES:
+            raise ValueError("invalid_table_name")
+        self.table_name = table_name
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
-            conn.executescript(_SQLITE_SCHEMA)
-            _sqlite_migrate(conn)
+            conn.executescript(_sqlite_schema_for(table_name))
+            _sqlite_migrate(conn, table_name)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
@@ -433,7 +540,7 @@ class SqliteExperimentStore(ExperimentStore):
             params.append(date_to)
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        sql = f"SELECT * FROM experiment_records {where} ORDER BY experiment_date DESC, id DESC"
+        sql = f"SELECT * FROM {self.table_name} {where} ORDER BY experiment_date DESC, id DESC"
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [self._row_to_dict(r) for r in rows]
@@ -441,17 +548,18 @@ class SqliteExperimentStore(ExperimentStore):
     def get_by_id(self, record_id: int) -> Optional[dict[str, Any]]:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM experiment_records WHERE id = ?", (record_id,)
+                f"SELECT * FROM {self.table_name} WHERE id = ?", (record_id,)
             ).fetchone()
         return self._row_to_dict(row) if row else None
 
     def create_record(self, data: dict[str, Any]) -> dict[str, Any]:
         payload = self._normalize_payload(data)
         now = _utc_now()
+        tbl = self.table_name
         with self._connect() as conn:
             cur = conn.execute(
-                """
-                INSERT INTO experiment_records (
+                f"""
+                INSERT INTO {tbl} (
                     group_name, subgroup_name, experiment_date, operator,
                     camera_device, light_device, illuminance, color,
                     grade_before, lstar_before, grade_after, lstar_after,
@@ -497,10 +605,11 @@ class SqliteExperimentStore(ExperimentStore):
         if not self.get_by_id(record_id):
             return None
         now = _utc_now()
+        tbl = self.table_name
         with self._connect() as conn:
             conn.execute(
-                """
-                UPDATE experiment_records SET
+                f"""
+                UPDATE {tbl} SET
                     image_before_rel = ?, image_after_rel = ?, updated_at = ?
                 WHERE id = ?
                 """,
@@ -513,10 +622,11 @@ class SqliteExperimentStore(ExperimentStore):
             return None
         payload = self._normalize_payload(data)
         now = _utc_now()
+        tbl = self.table_name
         with self._connect() as conn:
             conn.execute(
-                """
-                UPDATE experiment_records SET
+                f"""
+                UPDATE {tbl} SET
                     group_name = ?, subgroup_name = ?, experiment_date = ?, operator = ?,
                     camera_device = ?, light_device = ?, illuminance = ?, color = ?,
                     grade_before = ?, lstar_before = ?, grade_after = ?, lstar_after = ?,
@@ -553,16 +663,17 @@ class SqliteExperimentStore(ExperimentStore):
         if not self.get_by_id(record_id):
             return None
         now = _utc_now()
+        tbl = self.table_name
         with self._connect() as conn:
             conn.execute(
-                "UPDATE experiment_records SET include_in_stats = ?, updated_at = ? WHERE id = ?",
+                f"UPDATE {tbl} SET include_in_stats = ?, updated_at = ? WHERE id = ?",
                 (1 if include else 0, now, record_id),
             )
         return self.get_by_id(record_id)
 
     def delete_record(self, record_id: int) -> bool:
         with self._connect() as conn:
-            cur = conn.execute("DELETE FROM experiment_records WHERE id = ?", (record_id,))
+            cur = conn.execute(f"DELETE FROM {self.table_name} WHERE id = ?", (record_id,))
         return cur.rowcount > 0
 
     def bulk_delete(self, ids: list[int]) -> int:
@@ -571,7 +682,7 @@ class SqliteExperimentStore(ExperimentStore):
         placeholders = ",".join("?" * len(ids))
         with self._connect() as conn:
             cur = conn.execute(
-                f"DELETE FROM experiment_records WHERE id IN ({placeholders})", ids
+                f"DELETE FROM {self.table_name} WHERE id IN ({placeholders})", ids
             )
         return cur.rowcount
 
@@ -589,10 +700,11 @@ class SqliteExperimentStore(ExperimentStore):
             "group_format": GROUP_FORMAT_HINT,
             "subgroup_format": SUBGROUP_FORMAT_HINT,
         }
+        tbl = self.table_name
         with self._connect() as conn:
             for field in fields:
                 rows = conn.execute(
-                    f"SELECT DISTINCT {field} FROM experiment_records "
+                    f"SELECT DISTINCT {field} FROM {tbl} "
                     f"WHERE {field} IS NOT NULL AND {field} != '' "
                     f"ORDER BY {field}"
                 ).fetchall()
@@ -602,14 +714,14 @@ class SqliteExperimentStore(ExperimentStore):
     def suggest_group_name(self, date_yyyymmdd: Optional[str] = None) -> str:
         del date_yyyymmdd  # 中文序号命名不再绑定日期
         with self._connect() as conn:
-            rows = conn.execute("SELECT DISTINCT group_name FROM experiment_records").fetchall()
+            rows = conn.execute(f"SELECT DISTINCT group_name FROM {self.table_name}").fetchall()
         max_seq = max((_parse_group_seq(r[0]) for r in rows), default=0)
         return f"第{_int_to_chinese(max_seq + 1)}大组"
 
     def suggest_subgroup_name(self, group_name: str) -> str:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT subgroup_name FROM experiment_records "
+                f"SELECT subgroup_name FROM {self.table_name} "
                 "WHERE group_name = ? AND subgroup_name IS NOT NULL",
                 (group_name,),
             ).fetchall()
@@ -618,7 +730,10 @@ class SqliteExperimentStore(ExperimentStore):
 
 
 class MysqlExperimentStore(ExperimentStore):
-    def __init__(self, mysql_cfg: dict[str, Any]) -> None:
+    def __init__(self, mysql_cfg: dict[str, Any], table_name: str = TABLE_PROD) -> None:
+        if table_name not in ALLOWED_TABLES:
+            raise ValueError("invalid_table_name")
+        self.table_name = table_name
         if pymysql is None:
             raise RuntimeError("pymysql_not_installed")
         self._cfg = mysql_cfg
@@ -626,8 +741,8 @@ class MysqlExperimentStore(ExperimentStore):
         conn = self._connect()
         try:
             with conn.cursor() as cur:
-                cur.execute(_MYSQL_SCHEMA)
-            _mysql_migrate(conn)
+                cur.execute(_mysql_schema_for(table_name))
+            _mysql_migrate(conn, table_name)
             conn.commit()
         finally:
             conn.close()
@@ -725,7 +840,7 @@ class MysqlExperimentStore(ExperimentStore):
             params.append(date_to)
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        sql = f"SELECT * FROM experiment_records {where} ORDER BY experiment_date DESC, id DESC"
+        sql = f"SELECT * FROM {self.table_name} {where} ORDER BY experiment_date DESC, id DESC"
         conn = self._connect()
         try:
             with conn.cursor() as cur:
@@ -739,7 +854,7 @@ class MysqlExperimentStore(ExperimentStore):
         conn = self._connect()
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT * FROM experiment_records WHERE id = %s", (record_id,))
+                cur.execute(f"SELECT * FROM {self.table_name} WHERE id = %s", (record_id,))
                 row = cur.fetchone()
         finally:
             conn.close()
@@ -748,12 +863,13 @@ class MysqlExperimentStore(ExperimentStore):
     def create_record(self, data: dict[str, Any]) -> dict[str, Any]:
         payload = self._normalize_payload(data)
         now = _utc_now()
+        tbl = self.table_name
         conn = self._connect()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    INSERT INTO experiment_records (
+                    f"""
+                    INSERT INTO {tbl} (
                         group_name, subgroup_name, experiment_date, operator,
                         camera_device, light_device, illuminance, color,
                         grade_before, lstar_before, grade_after, lstar_after,
@@ -805,12 +921,13 @@ class MysqlExperimentStore(ExperimentStore):
         if not self.get_by_id(record_id):
             return None
         now = _utc_now()
+        tbl = self.table_name
         conn = self._connect()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    UPDATE experiment_records SET
+                    f"""
+                    UPDATE {tbl} SET
                         image_before_rel = %s, image_after_rel = %s, updated_at = %s
                     WHERE id = %s
                     """,
@@ -829,12 +946,13 @@ class MysqlExperimentStore(ExperimentStore):
             return None
         payload = self._normalize_payload(data)
         now = _utc_now()
+        tbl = self.table_name
         conn = self._connect()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    UPDATE experiment_records SET
+                    f"""
+                    UPDATE {tbl} SET
                         group_name = %s, subgroup_name = %s, experiment_date = %s, operator = %s,
                         camera_device = %s, light_device = %s, illuminance = %s, color = %s,
                         grade_before = %s, lstar_before = %s, grade_after = %s, lstar_after = %s,
@@ -877,11 +995,12 @@ class MysqlExperimentStore(ExperimentStore):
         if not self.get_by_id(record_id):
             return None
         now = _utc_now()
+        tbl = self.table_name
         conn = self._connect()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE experiment_records SET include_in_stats = %s, updated_at = %s WHERE id = %s",
+                    f"UPDATE {tbl} SET include_in_stats = %s, updated_at = %s WHERE id = %s",
                     (1 if include else 0, now, record_id),
                 )
             conn.commit()
@@ -896,7 +1015,7 @@ class MysqlExperimentStore(ExperimentStore):
         conn = self._connect()
         try:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM experiment_records WHERE id = %s", (record_id,))
+                cur.execute(f"DELETE FROM {self.table_name} WHERE id = %s", (record_id,))
                 deleted = cur.rowcount
             conn.commit()
         except Exception:
@@ -914,7 +1033,7 @@ class MysqlExperimentStore(ExperimentStore):
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    f"DELETE FROM experiment_records WHERE id IN ({placeholders})", ids
+                    f"DELETE FROM {self.table_name} WHERE id IN ({placeholders})", ids
                 )
                 deleted = cur.rowcount
             conn.commit()
@@ -939,12 +1058,13 @@ class MysqlExperimentStore(ExperimentStore):
             "group_format": GROUP_FORMAT_HINT,
             "subgroup_format": SUBGROUP_FORMAT_HINT,
         }
+        tbl = self.table_name
         conn = self._connect()
         try:
             with conn.cursor() as cur:
                 for field in fields:
                     cur.execute(
-                        f"SELECT DISTINCT {field} FROM experiment_records "
+                        f"SELECT DISTINCT {field} FROM {tbl} "
                         f"WHERE {field} IS NOT NULL AND {field} != '' "
                         f"ORDER BY {field}"
                     )
@@ -958,7 +1078,7 @@ class MysqlExperimentStore(ExperimentStore):
         conn = self._connect()
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT DISTINCT group_name FROM experiment_records")
+                cur.execute(f"SELECT DISTINCT group_name FROM {self.table_name}")
                 rows = cur.fetchall()
         finally:
             conn.close()
@@ -970,7 +1090,7 @@ class MysqlExperimentStore(ExperimentStore):
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT subgroup_name FROM experiment_records "
+                    f"SELECT subgroup_name FROM {self.table_name} "
                     "WHERE group_name = %s AND subgroup_name IS NOT NULL",
                     (group_name,),
                 )
@@ -981,9 +1101,16 @@ class MysqlExperimentStore(ExperimentStore):
         return f"第{_int_to_chinese(max_seq + 1)}小组"
 
 
-def create_experiment_store(exp_cfg: dict[str, Any], root: Path) -> ExperimentStore:
+def create_experiment_store(
+    exp_cfg: dict[str, Any],
+    root: Path,
+    *,
+    table_name: str = TABLE_PROD,
+) -> ExperimentStore:
+    if table_name not in ALLOWED_TABLES:
+        raise ValueError("invalid_table_name")
     backend = (exp_cfg.get("backend") or "sqlite").lower()
     if backend == "mysql":
-        return MysqlExperimentStore(exp_cfg.get("mysql") or {})
+        return MysqlExperimentStore(exp_cfg.get("mysql") or {}, table_name=table_name)
     db_rel = exp_cfg.get("db_path", "data/experiment_records.db")
-    return SqliteExperimentStore(root / db_rel)
+    return SqliteExperimentStore(root / db_rel, table_name=table_name)
