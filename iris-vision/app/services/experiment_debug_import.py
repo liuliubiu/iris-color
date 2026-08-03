@@ -91,7 +91,11 @@ def experiment_snapshot_urls(record_id: int, api_key: str, *, table_set: str = "
     return {
         "thumb_before_url": f"{base}/before.jpg{key_q}",
         "thumb_after_url": f"{base}/after.jpg{key_q}",
+        "iris_ring_url": f"{base}/iris_ring.jpg{key_q}",
     }
+
+
+IRIS_RING_SNAPSHOT_FILENAME = "iris_ring.jpg"
 
 
 def _split_compare_panel_array(
@@ -124,10 +128,13 @@ def _write_compare_pair(
     after_img: np.ndarray,
     record_id: int,
     audit: Optional[dict[str, Any]] = None,
+    iris_ring_img: Optional[np.ndarray] = None,
 ) -> dict[str, str]:
     dest_dir.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(dest_dir / "before.jpg"), before_img)
     cv2.imwrite(str(dest_dir / "after.jpg"), after_img)
+    if iris_ring_img is not None:
+        cv2.imwrite(str(dest_dir / IRIS_RING_SNAPSHOT_FILENAME), iris_ring_img)
     if audit is not None:
         save_compare_audit(dest_dir, audit)
     return {
@@ -556,14 +563,19 @@ def _generate_compare_snapshots_from_pipeline(
     dest_dir = snapshot_root / str(record_id)
     before = images.get("08_iris_before")
     after = images.get("09_iris_after")
+    iris_ring = images.get("02_iris_ring")
     if before is not None and after is not None:
-        return _write_compare_pair(dest_dir, before, after, record_id, audit=audit)
+        return _write_compare_pair(
+            dest_dir, before, after, record_id, audit=audit, iris_ring_img=iris_ring
+        )
 
     panel = images.get("07_sclera_before_after")
     if panel is not None:
         left, right = _split_compare_panel_array(panel)
         if left is not None and right is not None:
-            return _write_compare_pair(dest_dir, left, right, record_id, audit=audit)
+            return _write_compare_pair(
+                dest_dir, left, right, record_id, audit=audit, iris_ring_img=iris_ring
+            )
 
     return {"image_before_rel": None, "image_after_rel": None}
 
@@ -864,6 +876,10 @@ def snapshot_compare_images(
 
     before_src = run_dir / "08_iris_before.jpg"
     after_src = run_dir / "09_iris_after.jpg"
+    ring_src = run_dir / "02_iris_ring.jpg"
+    if ring_src.exists():
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ring_src, dest_dir / IRIS_RING_SNAPSHOT_FILENAME)
     if before_src.exists() and after_src.exists():
         shutil.copy2(before_src, before_dest)
         shutil.copy2(after_src, after_dest)
@@ -876,6 +892,9 @@ def snapshot_compare_images(
 
     panel_path = run_dir / "07_sclera_before_after.jpg"
     if panel_path.exists():
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        if ring_src.exists() and not (dest_dir / IRIS_RING_SNAPSHOT_FILENAME).exists():
+            shutil.copy2(ring_src, dest_dir / IRIS_RING_SNAPSHOT_FILENAME)
         left, right = _split_compare_panel(panel_path)
         if left is not None and right is not None:
             cv2.imwrite(str(before_dest), left)
@@ -1021,3 +1040,211 @@ def list_debug_runs_summary(debug_output_root: Path, api_key: str, limit: int = 
             "manual_adjusted": payload.get("manual_adjusted"),
         })
     return out
+
+
+_IMG_EXTS = (".jpg", ".jpeg", ".png")
+
+
+def _list_all_img_rels(img_root: Path) -> list[str]:
+    if not img_root.exists():
+        return []
+    items: list[str] = []
+    for path in img_root.rglob("*"):
+        if path.suffix.lower() in _IMG_EXTS and path.is_file():
+            items.append(path.relative_to(img_root).as_posix())
+    return sorted(items)
+
+
+def _filter_folder_images(
+    all_rels: list[str],
+    folder_prefix: str,
+    *,
+    include_subfolders: bool = False,
+) -> list[str]:
+    prefix = (folder_prefix or "").replace("\\", "/").strip("/")
+    if ".." in prefix:
+        raise ValueError("invalid_folder_prefix")
+
+    out: list[str] = []
+    for rel in all_rels:
+        rel_norm = rel.replace("\\", "/")
+        if not prefix:
+            if include_subfolders:
+                out.append(rel_norm)
+            elif "/" not in rel_norm:
+                out.append(rel_norm)
+            continue
+        if include_subfolders:
+            if rel_norm == prefix or rel_norm.startswith(prefix + "/"):
+                out.append(rel_norm)
+        elif rel_norm.startswith(prefix + "/"):
+            rest = rel_norm[len(prefix) + 1 :]
+            if rest and "/" not in rest:
+                out.append(rel_norm)
+    return out
+
+
+def _merge_import_to_record(import_payload: dict, experiment_context: dict) -> dict[str, Any]:
+    ctx = experiment_context or {}
+    subgroup = ctx.get("subgroup_name")
+    return {
+        "group_name": (ctx.get("group_name") or "").strip(),
+        "subgroup_name": subgroup.strip() if isinstance(subgroup, str) and subgroup.strip() else None,
+        "experiment_date": (ctx.get("experiment_date") or "").strip(),
+        "operator": (ctx.get("operator") or "").strip(),
+        "camera_device": ctx.get("camera_device") or None,
+        "light_device": ctx.get("light_device") or None,
+        "illuminance": ctx.get("illuminance"),
+        "color": import_payload.get("color"),
+        "grade_before": import_payload.get("grade_before"),
+        "lstar_before": import_payload.get("lstar_before"),
+        "grade_after": import_payload.get("grade_after"),
+        "lstar_after": import_payload.get("lstar_after"),
+        "notes": import_payload.get("summary"),
+        "image_rel": import_payload.get("image_rel"),
+        "debug_run_id": import_payload.get("debug_run_id"),
+        "skip_quality": bool(import_payload.get("skip_quality")),
+        "manual_adjusted": bool(import_payload.get("manual_adjusted")),
+        "include_in_stats": True,
+    }
+
+
+def batch_import_folder(
+    folder_prefix: str,
+    experiment_context: dict,
+    store,
+    config: dict,
+    config_path: Path,
+    img_root: Path,
+    debug_output_root: Path,
+    *,
+    skip_quality: bool = False,
+    skip_existing: bool = True,
+    include_subfolders: bool = False,
+    closeup_mode: str = "auto",
+) -> dict[str, Any]:
+    """批量识别 img/ 文件夹内图片并写入实验记录（单张失败不中断整批）。"""
+    prefix = (folder_prefix or "").replace("\\", "/").strip("/")
+    if ".." in prefix:
+        raise ValueError("invalid_folder_prefix")
+
+    ctx = experiment_context or {}
+    if not (ctx.get("group_name") or "").strip():
+        raise ValueError("missing_group_name")
+    if not (ctx.get("operator") or "").strip():
+        raise ValueError("missing_operator")
+    if not (ctx.get("experiment_date") or "").strip():
+        raise ValueError("missing_experiment_date")
+
+    all_rels = _list_all_img_rels(img_root)
+    image_rels = _filter_folder_images(
+        all_rels, prefix, include_subfolders=include_subfolders
+    )
+
+    existing_rels: set[str] = set()
+    if skip_existing:
+        for rec in store.list_records():
+            rel = rec.get("image_rel")
+            if isinstance(rel, str) and rel.strip():
+                existing_rels.add(rel.replace("\\", "/"))
+
+    from app.services.debug_viz import build_debug_images, save_debug_run
+
+    mode = closeup_mode if closeup_mode in ("auto", "precise", "rough") else "auto"
+    debug_cfg = config.get("debug", {})
+    save_to_disk = bool(debug_cfg.get("save_to_disk", True))
+    highlight_v = int(config.get("highlight_v_threshold", 240))
+    eye_cfg = config.get("eye_closeup", {})
+
+    results: list[dict[str, Any]] = []
+    succeeded = 0
+    failed = 0
+    skipped = 0
+
+    for rel in image_rels:
+        if skip_existing and rel in existing_rels:
+            results.append({
+                "rel": rel,
+                "ok": False,
+                "skipped": True,
+                "reason": "already_imported",
+            })
+            skipped += 1
+            continue
+
+        target = (img_root / rel).resolve()
+        root_resolved = img_root.resolve()
+        if not str(target).startswith(str(root_resolved)) or not target.is_file():
+            results.append({"rel": rel, "ok": False, "error": "image_not_found"})
+            failed += 1
+            continue
+
+        image_bgr = _imread_unicode(target)
+        if image_bgr is None:
+            results.append({"rel": rel, "ok": False, "error": "invalid_image_format"})
+            failed += 1
+            continue
+
+        try:
+            pipeline, metrics, skip_quality_used = run_record_recognition(
+                image_bgr,
+                config,
+                config_path,
+                image_rel=rel,
+                skip_quality=True if skip_quality else False,
+                closeup_mode=mode,
+            )
+        except ValueError as exc:
+            results.append({"rel": rel, "ok": False, "error": str(exc)})
+            failed += 1
+            continue
+        except Exception as exc:
+            results.append({"rel": rel, "ok": False, "error": str(exc)})
+            failed += 1
+            continue
+
+        source_name = Path(rel).name
+        metrics["source_filename"] = source_name
+        metrics["original_filename"] = source_name
+
+        run_id: Optional[str] = None
+        if save_to_disk:
+            images = build_debug_images(
+                pipeline, eye_cfg, config=config, highlight_v=highlight_v
+            )
+            run_id, _ = save_debug_run(debug_output_root, image_bgr, images, metrics)
+
+        import_payload = metrics_to_import_payload(metrics, run_id)
+        record_data = _merge_import_to_record(import_payload, ctx)
+
+        try:
+            record = store.create_record(record_data)
+        except ValueError as exc:
+            results.append({"rel": rel, "ok": False, "error": str(exc)})
+            failed += 1
+            continue
+        except Exception as exc:
+            results.append({"rel": rel, "ok": False, "error": str(exc)})
+            failed += 1
+            continue
+
+        results.append({
+            "rel": rel,
+            "ok": True,
+            "record_id": record.get("id"),
+            "grade_after": record.get("grade_after"),
+            "skip_quality_used": bool(skip_quality_used),
+            "record": record,
+        })
+        succeeded += 1
+        if skip_existing:
+            existing_rels.add(rel)
+
+    return {
+        "folder_prefix": prefix,
+        "total": len(image_rels),
+        "succeeded": succeeded,
+        "failed": failed,
+        "skipped": skipped,
+        "results": results,
+    }

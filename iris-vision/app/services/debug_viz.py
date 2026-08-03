@@ -744,7 +744,7 @@ def save_debug_run(
     metrics: dict,
 ) -> Tuple[str, Path]:
     """保存到 debug_output/{run_id}/，返回 run_id 与目录。"""
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     run_dir = output_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 

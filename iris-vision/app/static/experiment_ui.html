@@ -175,6 +175,14 @@
     margin-top: 8px; border: 1px solid #e5e7eb; border-radius: 6px; max-width: 100%;
     background: #0f172a;
   }
+  .region-dialog-img {
+    width: 100%; max-height: 62vh; object-fit: contain; background: #0f172a;
+    border: 1px solid #e5e7eb; border-radius: 8px; display: block;
+  }
+  .region-dialog-meta {
+    font-size: 12px; color: #64748b; line-height: 1.7; margin-bottom: 12px;
+  }
+  .region-dialog-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
   .table-set-tabs { margin-right: 8px; }
   .bulk-progress-list { max-height: 280px; overflow-y: auto; font-size: 12px; line-height: 1.7; }
   .bulk-progress-list .ok { color: #15803d; }
@@ -436,6 +444,15 @@
                 <el-button v-if="canCompare(scope.row)" type="primary" link size="small"
                   :loading="compareLoadingId === scope.row.id"
                   @click.stop="openCompareDialog(scope.row)">对比</el-button>
+                <span v-else style="color:#cbd5e1">—</span>
+              </template>
+            </el-table-column>
+
+            <el-table-column label="识别区域" width="88" align="center" fixed="right">
+              <template v-slot="scope">
+                <el-button v-if="canRecognize(scope.row)" type="primary" link size="small"
+                  :loading="regionLoadingId === scope.row.id"
+                  @click.stop="openRegionDialog(scope.row)">查看</el-button>
                 <span v-else style="color:#cbd5e1">—</span>
               </template>
             </el-table-column>
@@ -717,6 +734,32 @@
           本快照由原图即时重算生成（非 Debug run 复制）。算法与 Debug 相同，但定位/参数以当前配置为准。
         </div>
       </div>
+    </el-dialog>
+
+    <!-- 识别区域查看 -->
+    <el-dialog v-model="regionDialogVisible" title="识别区域" width="720px" top="5vh"
+      destroy-on-close @closed="onRegionDialogClosed">
+      <div v-if="regionTarget" class="region-dialog-meta">
+        记录 #{{ regionTarget.id }}
+        <span v-if="regionTarget.image_rel"> · {{ regionTarget.image_rel }}</span>
+        · 调色后 {{ regionTarget.grade_after || '—' }} · L* {{ fmtLstar(regionTarget.lstar_after) }}
+        <span v-if="regionTarget.skip_quality" style="color:#b45309"> · 已跳过质量检测</span>
+        <span v-if="regionSkipQualityUsed" style="color:#b45309"> · 质量未通过，已自动跳过检测</span>
+      </div>
+      <div v-loading="regionLoading">
+        <img v-if="regionImageUrl" class="region-dialog-img" :src="regionImageUrl" alt="识别区域" />
+        <div v-else-if="!regionLoading" style="text-align:center;color:#909399;padding:24px">无法加载识别区域图</div>
+        <div v-if="regionImageSource" style="margin-top:8px;font-size:11px;color:#94a3b8;text-align:center">
+          来源：{{ regionSourceLabel(regionImageSource) }}
+        </div>
+      </div>
+      <template #footer>
+        <div class="region-dialog-actions">
+          <el-button v-if="canRecognize(regionTarget)" type="warning" @click="openRecognizeFromRegion">人工调整重识别</el-button>
+          <el-button type="danger" plain @click="deleteRegionRecord">删除此记录</el-button>
+          <el-button type="primary" @click="regionDialogVisible = false">关闭</el-button>
+        </div>
+      </template>
     </el-dialog>
 
     <!-- 重新识别 -->
@@ -1342,6 +1385,13 @@
       const recognizeOverwriteSnapshots = ref(true);
       const recognizeCanvasRef = ref(null);
       const recognizeOverlayUrl = ref('');
+      const regionDialogVisible = ref(false);
+      const regionLoading = ref(false);
+      const regionLoadingId = ref(null);
+      const regionTarget = ref(null);
+      const regionImageUrl = ref('');
+      const regionImageSource = ref('');
+      const regionSkipQualityUsed = ref(false);
       let recognizeManualState = null;
       let recognizeManualImage = null;
       let recognizeManualCtx = null;
@@ -2432,6 +2482,112 @@
         return !!(row.image_rel || row.debug_run_id);
       }
 
+      function regionSourceLabel(source) {
+        const map = {
+          snapshot: '实验快照（iris_ring.jpg）',
+          debug_run: 'Debug 运行记录',
+          preview: '即时重算预览',
+        };
+        return map[source] || source || '—';
+      }
+
+      async function snapshotFileExists(recordId, filename) {
+        const key = encodeURIComponent(apiKey.value);
+        const url = snapshotUrlPrefix.value + recordId + '/' + filename + '?key=' + key;
+        try {
+          const res = await fetch(url, { method: 'HEAD' });
+          return res.ok;
+        } catch (_) {
+          return false;
+        }
+      }
+
+      async function debugFileExists(runId, filename) {
+        const key = encodeURIComponent(apiKey.value);
+        const url = '/debug/files/' + encodeURIComponent(runId) + '/' + filename + '?key=' + key;
+        try {
+          const res = await fetch(url, { method: 'HEAD' });
+          return res.ok;
+        } catch (_) {
+          return false;
+        }
+      }
+
+      async function loadRegionImage(row) {
+        const key = encodeURIComponent(apiKey.value);
+        regionSkipQualityUsed.value = false;
+        if (row.id && await snapshotFileExists(row.id, 'iris_ring.jpg')) {
+          return {
+            url: snapshotUrlPrefix.value + row.id + '/iris_ring.jpg?key=' + key,
+            source: 'snapshot',
+          };
+        }
+        if (row.debug_run_id && await debugFileExists(row.debug_run_id, '02_iris_ring.jpg')) {
+          return {
+            url: '/debug/files/' + encodeURIComponent(row.debug_run_id) + '/02_iris_ring.jpg?key=' + key,
+            source: 'debug_run',
+          };
+        }
+        const data = await apiFetchRecords('/experiments/records/' + row.id + '/recognize', {
+          method: 'POST',
+          body: { skip_quality: !!row.skip_quality },
+        });
+        regionSkipQualityUsed.value = !!data.skip_quality_used;
+        const b64 = data.images_base64?.['02_iris_ring'];
+        if (!b64) throw new Error('无法获取识别区域图');
+        return {
+          url: 'data:image/jpeg;base64,' + b64,
+          source: 'preview',
+        };
+      }
+
+      function onRegionDialogClosed() {
+        regionTarget.value = null;
+        regionImageUrl.value = '';
+        regionImageSource.value = '';
+        regionSkipQualityUsed.value = false;
+        regionLoadingId.value = null;
+      }
+
+      async function openRegionDialog(row) {
+        if (!canRecognize(row)) {
+          ElMessage.warning('该记录没有关联原图或 Debug 运行，无法查看识别区域');
+          return;
+        }
+        regionTarget.value = { ...row };
+        regionImageUrl.value = '';
+        regionImageSource.value = '';
+        regionSkipQualityUsed.value = false;
+        regionDialogVisible.value = true;
+        regionLoading.value = true;
+        regionLoadingId.value = row.id;
+        try {
+          const loaded = await loadRegionImage(row);
+          regionImageUrl.value = loaded.url;
+          regionImageSource.value = loaded.source;
+        } catch (e) {
+          ElMessage.error('加载识别区域失败：' + compareErrorLabel(e.message));
+        } finally {
+          regionLoading.value = false;
+          regionLoadingId.value = null;
+        }
+      }
+
+      async function openRecognizeFromRegion() {
+        const row = regionTarget.value;
+        if (!row) return;
+        regionDialogVisible.value = false;
+        await nextTick();
+        await openRecognizeDialog(row);
+      }
+
+      async function deleteRegionRecord() {
+        const row = regionTarget.value;
+        if (!row?.id) return;
+        regionDialogVisible.value = false;
+        await deleteOne(row);
+      }
+
       function paramsFromMetrics(m) {
         const mp = m?.manual_params;
         if (mp && mp.center_x != null) {
@@ -3269,6 +3425,9 @@
         recognizeOverlayUrl, recognizeManualReady, recognizeDiffRows, openRecognizeDialog, openRecognizeFromForm,
         runRecognizePreview, applyRecognize, onRecognizePointerDown, onRecognizePointerMove,
         onRecognizePointerUp, onRecognizePointerLeave, onRecognizeDialogClosed,
+        regionDialogVisible, regionLoading, regionLoadingId, regionTarget, regionImageUrl,
+        regionImageSource, regionSkipQualityUsed, regionSourceLabel, openRegionDialog,
+        openRecognizeFromRegion, deleteRegionRecord, onRegionDialogClosed,
         auditSourceLabel, consistencyLabel, fmtLabTriple, compareErrorLabel,
       };
     },

@@ -328,6 +328,129 @@
       margin: 0 0 8px;
       line-height: 1.4;
     }
+    .batch-import {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px dashed #30363d;
+    }
+    .batch-import h4 {
+      margin: 0 0 8px;
+      font-size: 12px;
+      color: #58a6ff;
+      font-weight: 600;
+    }
+    .batch-import select {
+      width: 100%;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid #30363d;
+      background: #0d1117;
+      color: #e6edf3;
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+    .batch-import .batch-count {
+      font-size: 11px;
+      color: #8b949e;
+      margin-bottom: 8px;
+      min-height: 16px;
+    }
+    .batch-import .checkbox {
+      margin-bottom: 6px;
+      font-size: 12px;
+    }
+    #btnBatchImportFolder {
+      width: 100%;
+      margin-top: 4px;
+    }
+    #btnBatchImportFolder:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .batch-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.65);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 16px;
+    }
+    .batch-modal-overlay[hidden] { display: none; }
+    .batch-modal {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      width: min(520px, 100%);
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+    }
+    .batch-modal-head {
+      padding: 14px 16px;
+      border-bottom: 1px solid #30363d;
+      font-size: 14px;
+      font-weight: 600;
+      color: #e6edf3;
+    }
+    .batch-modal-body {
+      padding: 14px 16px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .batch-modal-summary {
+      font-size: 13px;
+      color: #8b949e;
+      margin-bottom: 10px;
+      line-height: 1.5;
+    }
+    .batch-progress-list {
+      max-height: 280px;
+      overflow-y: auto;
+      font-size: 12px;
+      line-height: 1.7;
+      font-family: ui-monospace, monospace;
+    }
+    .batch-progress-list .ok { color: #3fb950; }
+    .batch-progress-list .fail { color: #ffa198; }
+    .batch-progress-list .skip { color: #8b949e; }
+    .batch-modal-foot {
+      padding: 12px 16px;
+      border-top: 1px solid #30363d;
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+    .batch-modal-foot a {
+      padding: 6px 14px;
+      border-radius: 6px;
+      border: 1px solid #30363d;
+      background: #21262d;
+      color: #79c0ff;
+      text-decoration: none;
+      font-size: 13px;
+    }
+    .batch-modal-foot button {
+      padding: 6px 14px;
+      border-radius: 6px;
+      border: 1px solid #30363d;
+      background: #21262d;
+      color: #e6edf3;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .batch-modal-foot button.primary {
+      background: #238636;
+      border-color: #238636;
+      color: #fff;
+    }
+    .batch-modal-foot button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
     #imgSelectStatus {
       min-height: 16px;
       color: #8b949e;
@@ -452,6 +575,24 @@
         <div class="btn-row">
           <button type="button" id="btnRefreshExpMeta">刷新组别列表</button>
         </div>
+        <div class="batch-import" id="batchImportSection">
+          <h4>批量识别并导入</h4>
+          <p class="exp-hint">选择 img/ 子文件夹，将该文件夹内全部图片识别并自动写入上方指定的大组/小组。</p>
+          <label for="batchFolderSelect">目标文件夹</label>
+          <select id="batchFolderSelect">
+            <option value="">— 载入 img 列表后选择 —</option>
+          </select>
+          <div class="batch-count" id="batchFolderCount"></div>
+          <label class="checkbox">
+            <input type="checkbox" id="batchSkipExisting" checked />
+            跳过已导入的图片
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" id="batchIncludeSubfolders" />
+            包含子文件夹
+          </label>
+          <button type="button" id="btnBatchImportFolder" disabled>批量识别并导入本文件夹</button>
+        </div>
       </div>
 
       <div class="label-actions" id="labelActions" hidden>
@@ -468,6 +609,20 @@
 
       <div class="history" id="history"></div>
     </section>
+
+    <div class="batch-modal-overlay" id="batchImportModal" hidden>
+      <div class="batch-modal" role="dialog" aria-labelledby="batchImportModalTitle">
+        <div class="batch-modal-head" id="batchImportModalTitle">批量导入进度</div>
+        <div class="batch-modal-body">
+          <div class="batch-modal-summary" id="batchImportSummary">正在批量导入，请稍候…</div>
+          <div class="batch-progress-list" id="batchImportResults"></div>
+        </div>
+        <div class="batch-modal-foot">
+          <a id="batchImportOpenExp" href="#" target="iris_experiment_ui" hidden>打开实验记录页</a>
+          <button type="button" id="btnBatchImportClose" disabled>关闭</button>
+        </div>
+      </div>
+    </div>
 
     <section class="panel" id="resultPanel">
       <h2>识别结果</h2>
@@ -632,6 +787,175 @@
       if (!rel) return ''
       const idx = rel.lastIndexOf('/')
       return idx >= 0 ? rel.slice(0, idx) : ''
+    }
+
+    function getUniqueFolderPrefixes() {
+      const folders = new Set()
+      for (const item of imgFileList) {
+        const prefix = getFolderPrefix(item.rel)
+        if (prefix) folders.add(prefix)
+      }
+      if (imgFileList.some((item) => !getFolderPrefix(item.rel))) {
+        folders.add('')
+      }
+      return [...folders].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+    }
+
+    function filterFolderImages(folderPrefix, { includeSubfolders = false } = {}) {
+      const prefix = (folderPrefix || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+      return imgFileList.filter((item) => {
+        const rel = item.rel.replace(/\\/g, '/')
+        if (!prefix) {
+          if (includeSubfolders) return true
+          return !rel.includes('/')
+        }
+        if (includeSubfolders) {
+          return rel === prefix || rel.startsWith(prefix + '/')
+        }
+        if (!rel.startsWith(prefix + '/')) return false
+        const rest = rel.slice(prefix.length + 1)
+        return rest && !rest.includes('/')
+      })
+    }
+
+    let batchImportLoading = false
+
+    function updateBatchFolderCount() {
+      const el = document.getElementById('batchFolderCount')
+      if (!el) return
+      const folder = document.getElementById('batchFolderSelect')?.value ?? ''
+      const includeSub = document.getElementById('batchIncludeSubfolders')?.checked
+      const count = filterFolderImages(folder, { includeSubfolders: includeSub }).length
+      el.textContent = count ? `该文件夹含 ${count} 张图片` : '该文件夹暂无图片'
+    }
+
+    function canBatchImport() {
+      const ctx = collectExperimentContext()
+      if (!ctx.group_name || !ctx.operator || !ctx.experiment_date) return false
+      const select = document.getElementById('batchFolderSelect')
+      if (!select || select.disabled) return false
+      const includeSub = document.getElementById('batchIncludeSubfolders')?.checked
+      const folder = select.value ?? ''
+      return filterFolderImages(folder, { includeSubfolders: includeSub }).length > 0
+    }
+
+    function updateBatchImportButton() {
+      const btn = document.getElementById('btnBatchImportFolder')
+      if (!btn) return
+      btn.disabled = batchImportLoading || !canBatchImport()
+    }
+
+    function renderBatchFolderSelect(preferred) {
+      const select = document.getElementById('batchFolderSelect')
+      if (!select) return
+      const folders = getUniqueFolderPrefixes()
+      const pref = preferred !== undefined ? preferred : (activeFolderPrefix || select.value || '')
+      let html = folders.map((f) => {
+        const label = f ? f : '(img 根目录)'
+        const val = String(f).replace(/"/g, '&quot;')
+        return `<option value="${val}">${label}</option>`
+      }).join('')
+      if (!folders.length) {
+        html = '<option value="">— 暂无文件夹 —</option>'
+        select.disabled = true
+      } else {
+        select.disabled = false
+      }
+      select.innerHTML = html
+      if (folders.includes(pref)) {
+        select.value = pref
+      } else if (folders.length) {
+        select.value = folders[0]
+      }
+      updateBatchFolderCount()
+      updateBatchImportButton()
+    }
+
+    function showBatchImportModal(show) {
+      document.getElementById('batchImportModal').hidden = !show
+    }
+
+    function renderBatchImportResults(data) {
+      const summary = document.getElementById('batchImportSummary')
+      summary.textContent = `完成：成功 ${data.succeeded || 0}，失败 ${data.failed || 0}，跳过 ${data.skipped || 0}（共 ${data.total || 0} 张）`
+      const list = document.getElementById('batchImportResults')
+      list.innerHTML = (data.results || []).map((item) => {
+        if (item.skipped) {
+          return `<div class="skip">${item.rel} — 已跳过（${item.reason || 'skipped'}）</div>`
+        }
+        if (item.ok) {
+          const grade = item.grade_after ? ` → ${item.grade_after}` : ''
+          const skipQ = item.skip_quality_used ? ' · 已自动跳过质量检测' : ''
+          return `<div class="ok">${item.rel} — 成功 #${item.record_id}${grade}${skipQ}</div>`
+        }
+        return `<div class="fail">${item.rel} — 失败：${item.error || 'unknown'}</div>`
+      }).join('') || '<div class="skip">无处理结果</div>'
+
+      const apiKey = keyInput.value.trim()
+      const expLink = document.getElementById('batchImportOpenExp')
+      expLink.href = `/experiments/ui?key=${encodeURIComponent(apiKey)}`
+      expLink.hidden = false
+    }
+
+    async function batchImportFolder() {
+      const ctx = collectExperimentContext()
+      if (!ctx.group_name || !ctx.operator || !ctx.experiment_date) {
+        alert('请先填写实验大组、实验人和日期')
+        return
+      }
+      const folderPrefix = document.getElementById('batchFolderSelect').value
+      const includeSubfolders = document.getElementById('batchIncludeSubfolders').checked
+      const skipExisting = document.getElementById('batchSkipExisting').checked
+      const skipQuality = document.getElementById('skipQuality').checked
+      const items = filterFolderImages(folderPrefix, { includeSubfolders: includeSubfolders })
+      if (!items.length) {
+        alert('所选文件夹内没有图片')
+        return
+      }
+      const folderLabel = folderPrefix || '(img 根目录)'
+      const subgroupLabel = ctx.subgroup_name || '（未分组）'
+      if (!confirm(
+        `即将批量导入 ${items.length} 张图片\n\n文件夹：${folderLabel}\n大组：${ctx.group_name}\n小组：${subgroupLabel}\n\n识别成功后自动写入实验记录，是否继续？`,
+      )) {
+        return
+      }
+
+      batchImportLoading = true
+      updateBatchImportButton()
+      showBatchImportModal(true)
+      document.getElementById('batchImportSummary').textContent = '正在批量导入，请稍候…'
+      document.getElementById('batchImportResults').innerHTML = ''
+      document.getElementById('btnBatchImportClose').disabled = true
+      document.getElementById('batchImportOpenExp').hidden = true
+
+      try {
+        const data = await expApiFetch('/experiments/import/batch-from-folder', {
+          method: 'POST',
+          body: {
+            folder_prefix: folderPrefix,
+            experiment_context: ctx,
+            skip_quality: skipQuality,
+            skip_existing: skipExisting,
+            include_subfolders: includeSubfolders,
+          },
+        })
+        renderBatchImportResults(data)
+        try {
+          new BroadcastChannel(EXP_SYNC_CHANNEL).postMessage({
+            type: 'record_saved',
+            group_name: ctx.group_name,
+            subgroup_name: ctx.subgroup_name,
+          })
+        } catch (_) {}
+        saveExpPrefs()
+        await loadImgList()
+      } catch (err) {
+        document.getElementById('batchImportSummary').textContent = '批量导入失败：' + (err.message || err)
+      } finally {
+        batchImportLoading = false
+        document.getElementById('btnBatchImportClose').disabled = false
+        updateBatchImportButton()
+      }
     }
 
     function isImgMarked(item) {
@@ -1036,6 +1360,7 @@
         await applyExpSubgroupDefaults()
         panel.hidden = false
         lastGroupRefresh = Date.now()
+        updateBatchImportButton()
       } catch (err) {
         if (String(err.message).includes('experiments_disabled')) {
           panel.hidden = true
@@ -1081,9 +1406,27 @@
       }
     })
     ;['expOperator', 'expCamera', 'expLight', 'expDate', 'expIlluminance'].forEach((id) => {
-      document.getElementById(id).addEventListener('change', saveExpPrefs)
-      document.getElementById(id).addEventListener('input', saveExpPrefs)
+      document.getElementById(id).addEventListener('change', () => {
+        saveExpPrefs()
+        updateBatchImportButton()
+      })
+      document.getElementById(id).addEventListener('input', () => {
+        saveExpPrefs()
+        updateBatchImportButton()
+      })
     })
+    document.getElementById('expGroupName').addEventListener('change', () => updateBatchImportButton())
+    document.getElementById('batchFolderSelect').addEventListener('change', () => {
+      updateBatchFolderCount()
+      updateBatchImportButton()
+    })
+    document.getElementById('batchSkipExisting').addEventListener('change', updateBatchFolderCount)
+    document.getElementById('batchIncludeSubfolders').addEventListener('change', () => {
+      updateBatchFolderCount()
+      updateBatchImportButton()
+    })
+    document.getElementById('btnBatchImportFolder').onclick = () => batchImportFolder()
+    document.getElementById('btnBatchImportClose').onclick = () => showBatchImportModal(false)
 
     async function startCamera() {
       try {
@@ -1116,6 +1459,7 @@
         suppressImgSelectChange = false
         resortImgSelect()
         await applyPathInferredFields(sourceRel)
+        renderBatchFolderSelect(activeFolderPrefix)
       }
       document.getElementById('renameStatus').textContent = ''
       document.getElementById('renameStatus').className = 'rename-status'
@@ -1185,6 +1529,7 @@
         if (!res.ok) throw new Error(data.detail || res.statusText)
         imgFileList = data.images || []
         renderImgSelectOptions(document.getElementById('imgSelect').value || currentImgRel || '')
+        renderBatchFolderSelect(activeFolderPrefix || undefined)
       } catch (err) {
         alert('载入 img 列表失败：' + (err.message || err))
       }

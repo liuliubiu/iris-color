@@ -9,7 +9,9 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 from app.services.experiment_debug_import import (
     COMPARE_AUDIT_FILENAME,
+    IRIS_RING_SNAPSHOT_FILENAME,
     apply_record_recognition,
+    batch_import_folder,
     bulk_apply_record_recognition,
     build_record_recognition_preview,
     enrich_audit_with_current_standards,
@@ -726,6 +728,62 @@ def import_from_metrics(key: str = Query(...), body: dict = Body(...)):
     return enrich_import_payload_urls(payload, dbg_key)
 
 
+@router.post("/import/batch-from-folder")
+def batch_import_from_folder(key: str = Query(...), body: dict = Body(...)):
+    """批量识别 img/ 文件夹内图片并自动写入实验记录。"""
+    config = _verify_key(key)
+    if not config.get("debug", {}).get("enabled", True):
+        raise HTTPException(status_code=403, detail="debug_disabled")
+
+    folder_prefix = body.get("folder_prefix")
+    if folder_prefix is None:
+        raise HTTPException(status_code=400, detail="missing_folder_prefix")
+    if not isinstance(folder_prefix, str):
+        raise HTTPException(status_code=400, detail="invalid_folder_prefix")
+    if ".." in folder_prefix.replace("\\", "/"):
+        raise HTTPException(status_code=400, detail="invalid_folder_prefix")
+
+    experiment_context = body.get("experiment_context")
+    if not isinstance(experiment_context, dict):
+        raise HTTPException(status_code=400, detail="missing_experiment_context")
+
+    ts = _parse_table_set(body.get("table_set") or "prod")
+    store = _get_store(config, ts)
+
+    try:
+        result = batch_import_folder(
+            folder_prefix,
+            experiment_context,
+            store,
+            config,
+            CONFIG_PATH,
+            IMG_ROOT,
+            _debug_output_root(config),
+            skip_quality=bool(body.get("skip_quality", False)),
+            skip_existing=bool(body.get("skip_existing", True)),
+            include_subfolders=bool(body.get("include_subfolders", False)),
+            closeup_mode=body.get("mode") or "auto",
+        )
+    except ValueError as exc:
+        raise _handle_value_error(exc) from exc
+
+    for item in result.get("results") or []:
+        if not item.get("ok") or not item.get("record"):
+            continue
+        record = item["record"]
+        try:
+            updated = _persist_compare_snapshots(config, store, record, table_set=ts)
+            item["record_id"] = updated.get("id", item.get("record_id"))
+        except ValueError as exc:
+            item["ok"] = False
+            item["error"] = str(exc)
+            result["succeeded"] = max(0, int(result.get("succeeded", 0)) - 1)
+            result["failed"] = int(result.get("failed", 0)) + 1
+        item.pop("record", None)
+
+    return result
+
+
 @router.get("/debug/runs")
 def list_debug_runs_for_import(
     key: str = Query(...),
@@ -779,7 +837,7 @@ def get_test_experiment_snapshot(
 def _get_experiment_snapshot(record_id: int, filename: str, key: str, *, table_set: str):
     config = _verify_key(key)
     ts = _parse_table_set(table_set)
-    allowed = ("before.jpg", "after.jpg", COMPARE_AUDIT_FILENAME)
+    allowed = ("before.jpg", "after.jpg", IRIS_RING_SNAPSHOT_FILENAME, COMPARE_AUDIT_FILENAME)
     if filename not in allowed:
         raise HTTPException(status_code=400, detail="invalid_snapshot_file")
     path = _experiment_snapshot_root(config, ts) / str(record_id) / filename
